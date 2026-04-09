@@ -33,8 +33,8 @@ jobs:
           -vf "drawbox=x=0:y=ih-100:w=iw:h=100:color=black@0.5:t=fill, \
                drawbox=x=150:y=ih-65:w=iw-300:h=35:color=white@0.2:t=fill, \
                drawbox=x=150:y=ih-65:w=(iw-300)*${{ steps.subs.outputs.percent }}:h=35:color=red@0.9:t=fill, \
-               drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='ABONATI\: ${{ steps.subs.outputs.subs_count }} / ${{ steps.subs.outputs.target_count }}':x=(w-text_w)/2:y=ih-60:fontsize=28:fontcolor=white:shadowcolor=black:shadowx=2:shadowy=2, \
-               drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='LIVE CAMERA OBOR':x=150:y=ih-90:fontsize=20:fontcolor=yellow" \
+               drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='ABONATI\: ${{ steps.subs.outputs.subs_count }} / ${{ steps.subs.outputs.target_count }}':x=(w-text_w)/2:y=h-60:fontsize=28:fontcolor=white:shadowcolor=black:shadowx=2:shadowy=2, \
+               drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='LIVE CAMERA OBOR':x=150:y=h-90:fontsize=20:fontcolor=yellow" \
           -vcodec libx264 -preset veryfast -b:v 3500k -maxrate 3500k -bufsize 7000k -pix_fmt yuv420p \
           -acodec aac -ab 128k -ar 44100 \
           -f flv "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}"
