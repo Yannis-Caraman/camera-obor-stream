@@ -1,0 +1,19 @@
+name: Camera Obor Live 24/7
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+jobs:
+  run-stream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install FFmpeg
+        run: sudo apt update && sudo apt install -y ffmpeg
+
+      - name: Start Streaming to YouTube
+        run: |
+          ffmpeg -re -i "${{ secrets.RTSP_URL }}" \
+          -vcodec copy -acodec aac -ab 128k -ar 44100 \
+          -f flv "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}"
