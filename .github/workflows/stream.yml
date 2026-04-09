@@ -1,24 +1,19 @@
 name: Camera Obor FULL-HD PRO 24/7
-
 on:
   workflow_dispatch:
   schedule:
     - cron: '0 */6 * * *'
-
 concurrency:
   group: camera-stream
   cancel-in-progress: true
-
 jobs:
   run-stream:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
       - name: Install Tools
         run: sudo apt update && sudo apt install -y ffmpeg fonts-dejavu bc jq curl
-
       - name: Get Real Subs and Calculate Bar
         id: subs
         run: |
@@ -30,19 +25,18 @@ jobs:
           PERCENT_INT=$(echo "($SUBS * 100) / $TARGET" | bc)
           echo "$SUBS ($PERCENT_INT%)" > stats.txt
           echo "percent=$PERCENT" >> $GITHUB_OUTPUT
-
       - name: Start Streaming (Live + ChromaKey MP4 Overlay)
         run: |
           ffmpeg -hide_banner -loglevel error \
           -rtsp_transport tcp -i "${{ secrets.RTSP_URL }}" \
           -stream_loop -1 -i "video.mp4" \
           -filter_complex "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg]; \
-          [1:v]format=rgba,colorkey=0x00FF00:0.1:0.1,scale=1000:-1[vid]; \
+          [1:v]format=rgba,colorkey=0x00FF00:0.35:0.15,scale=1000:-1[vid]; \
           [bg][vid]overlay=x=80:y=(H-h)/2, \
           drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='ROAD TO 1000 SUBS!':x=(w-text_w)/2:y=860:fontsize=35:fontcolor=white:shadowcolor=black:shadowx=3:shadowy=3, \
           drawbox=x=557:y=910:w=806:h=66:color=0xFF00FF@0.9:t=fill, \
-          drawbox=x=560:y=913:w=800:h=60:color=black@0.0:t=fill, \
-          drawbox=x=560:y=913:w=800*${{ steps.subs.outputs.percent }}:h=60:color=white@0.3:t=fill, \
+          drawbox=x=560:y=913:w=800:h=60:color=black@0.9:t=fill, \
+          drawbox=x=560:y=913:w=800*${{ steps.subs.outputs.percent }}:h=60:color=white@0.75:t=fill, \
           drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile=stats.txt:expansion=none:x=(w-text_w)/2:y=923:fontsize=40:fontcolor=white[final]" \
           -map "[final]" -map 0:a? \
           -vcodec libx264 -preset veryfast -b:v 4500k -maxrate 4500k -bufsize 9000k -pix_fmt yuv420p -g 60 \
