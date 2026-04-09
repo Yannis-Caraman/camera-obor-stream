@@ -5,6 +5,11 @@ on:
   schedule:
     - cron: '0 */6 * * *'
 
+# MAGIA CARE OMOARĂ ROBOTUL BLOCAT
+concurrency:
+  group: camera-stream
+  cancel-in-progress: true
+
 jobs:
   run-stream:
     runs-on: ubuntu-latest
@@ -29,11 +34,11 @@ jobs:
           echo "$SUBS ($PERCENT_INT%)" > stats.txt
           echo "percent=$PERCENT" >> $GITHUB_OUTPUT
 
-      - name: Start Streaming (Live + Transparent WebM Centered Left)
+      - name: Start Streaming (Live + Auto-Detect WebM)
         run: |
           ffmpeg -hide_banner -loglevel error \
           -rtsp_transport tcp -analyzeduration 100M -probesize 100M -re -i "${{ secrets.RTSP_URL }}" \
-          -stream_loop -1 -c:v libvpx-vp9 -i "video.webm" \
+          -stream_loop -1 -i "video.webm" \
           -filter_complex "\
           [0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg]; \
           [1:v]format=rgba,colorkey=black:0.05:0.1,scale=350:-1[vid]; \
