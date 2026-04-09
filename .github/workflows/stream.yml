@@ -29,11 +29,11 @@ jobs:
           echo "$SUBS ($PERCENT_INT%)" > stats.txt
           echo "percent=$PERCENT" >> $GITHUB_OUTPUT
 
-      - name: Start Streaming (Live + Video Overlay)
+      - name: Start Streaming (Live + WebM Overlay)
         run: |
           ffmpeg -hide_banner -loglevel error \
           -rtsp_transport tcp -analyzeduration 100M -probesize 100M -re -i "${{ secrets.RTSP_URL }}" \
-          -stream_loop -1 -i "video.mp4" \
+          -stream_loop -1 -i "video.webm" \
           -filter_complex "\
           [0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg]; \
           [bg][1:v]overlay=x=150:y=(H-h)/2, \
