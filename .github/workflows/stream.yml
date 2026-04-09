@@ -33,15 +33,15 @@ jobs:
           echo "$SUBS ($PERCENT_INT%)" > stats.txt
           echo "percent=$PERCENT" >> $GITHUB_OUTPUT
 
-      - name: Start Streaming (Live + Resized WebM)
+      - name: Start Streaming (Live + HUGE WebM)
         run: |
           ffmpeg -hide_banner -loglevel error \
           -rtsp_transport tcp -analyzeduration 100M -probesize 100M -re -i "${{ secrets.RTSP_URL }}" \
           -stream_loop -1 -i "video.webm" \
           -filter_complex "\
           [0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg]; \
-          [1:v]format=rgba,colorkey=black:0.05:0.1,scale=600:-1[vid]; \
-          [bg][vid]overlay=x=150:y=(H-h)/2, \
+          [1:v]scale=900:-1[vid]; \
+          [bg][vid]overlay=x=80:y=(H-h)/2, \
           drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='ROAD TO 1000 SUBS!':x=(w-text_w)/2:y=860:fontsize=35:fontcolor=white:shadowcolor=black:shadowx=3:shadowy=3, \
           drawbox=x=557:y=910:w=806:h=66:color=0xFF00FF@0.9:t=fill, \
           drawbox=x=560:y=913:w=800:h=60:color=black@0.9:t=fill, \
