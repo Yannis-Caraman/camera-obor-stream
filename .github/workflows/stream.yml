@@ -25,14 +25,19 @@ jobs:
           RESPONSE=$(curl -s "https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${{ secrets.CHANNEL_ID }}&key=${{ secrets.YOUTUBE_API_KEY }}")
           SUBS=$(echo $RESPONSE | jq -r '.items[0].statistics.subscriberCount')
           TARGET=1000
-          
           PERCENT=$(echo "scale=2; $SUBS / $TARGET" | bc)
           if (( $(echo "$PERCENT > 1.0" | bc -l) )); then PERCENT=1.0; fi
           PERCENT_INT=$(echo "($SUBS * 100) / $TARGET" | bc)
-          
           echo "$SUBS ($PERCENT_INT%)" > stats.txt
           echo "percent=$PERCENT" >> $GITHUB_OUTPUT
 
       - name: Start Streaming (Live + GreenScreen WebM)
         run: |
-          ffmpeg -hide_banner -loglevel error -rtsp_transport tcp -analyzeduration 100M -probesize 100M -re -i "${{ secrets.RTSP_URL }}" -stream_loop -1 -i "video.webm" -filter_complex "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg];[1:v]format=rgba,colorkey=0x00FF00:0.1:0.1,scale=1000:-1[vid];[bg][vid]overlay=x=80:y=(H-h)/2,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='ROAD TO 1000 SUBS!':x=(w-text_w)/2:y=860:fontsize=35:fontcolor=white:shadowcolor=black:shadowx=3:shadowy=3,drawbox=x=557:y=910:w=806:h=66:color=0xFF00FF@0.9:t=fill,drawbox=x=560:y=913:w=800:h=60:color=black@0.9:t=fill,drawbox=x=560:y=913:w=800*${{ steps.subs.outputs.percent }}:h=60:color=white@0.3:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile=stats.txt:expansion=none:x=(w-text_w)/2:y=923:fontsize=40:fontcolor=white[final]" -map "[final]" -map 0:a? -vcodec libx264 -preset veryfast -b:v 4500k -maxrate 4500k -bufsize 9000k -pix_fmt yuv420p -acodec aac -ab 128k -ar 44100 -f flv "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}"
+          ffmpeg -hide_banner -loglevel error \
+          -rtsp_transport tcp -i "${{ secrets.RTSP_URL }}" \
+          -stream_loop -1 -i "video.webm" \
+          -filter_complex "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg]; [1:v]format=rgba,colorkey=0x00FF00:0.1:0.1,scale=1000:-1[vid]; [bg][vid]overlay=x=80:y=(H-h)/2, drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='ROAD TO 1000 SUBS!':x=(w-text_w)/2:y=860:fontsize=35:fontcolor=white:shadowcolor=black:shadowx=3:shadowy=3, drawbox=x=557:y=910:w=806:h=66:color=0xFF00FF@0.9:t=fill, drawbox=x=560:y=913:w=800:h=60:color=black@0.9:t=fill, drawbox=x=560:y=913:w=800*${{ steps.subs.outputs.percent }}:h=60:color=white@0.3:t=fill, drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile=stats.txt:expansion=none:x=(w-text_w)/2:y=923:fontsize=40:fontcolor=white[final]" \
+          -map "[final]" -map 0:a? \
+          -vcodec libx264 -preset veryfast -b:v 4500k -maxrate 4500k -bufsize 9000k -pix_fmt yuv420p -g 60 \
+          -acodec aac -ab 128k -ar 44100 \
+          -f flv "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}"
