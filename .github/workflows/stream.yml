@@ -23,7 +23,7 @@ jobs:
           if (( $(echo "$PERCENT > 1.0" | bc -l) )); then PERCENT=1.0; fi
           PERCENT_INT=$(echo "($SUBS * 100) / $TARGET" | bc)
           
-          # HACK: Scriem textul final într-un fișier pentru a evita eroarea cu "%"
+          # Scriem textul brut în fișier
           echo "$SUBS ($PERCENT_INT%)" > stats.txt
           
           echo "percent=$PERCENT" >> $GITHUB_OUTPUT
@@ -39,7 +39,7 @@ jobs:
                drawbox=x=(w-806)/2:y=910:w=806:h=66:color=0xFF00FF@0.9:t=fill, \
                drawbox=x=(w-800)/2:y=913:w=800:h=60:color=black@0.9:t=fill, \
                drawbox=x=(w-800)/2:y=913:w=800*${{ steps.subs.outputs.percent }}:h=60:color=white@0.3:t=fill, \
-               drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile=stats.txt:x=(w-text_w)/2:y=923:fontsize=40:fontcolor=white" \
+               drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile=stats.txt:expansion=none:x=(w-text_w)/2:y=923:fontsize=40:fontcolor=white" \
           -vcodec libx264 -preset veryfast -b:v 4500k -maxrate 4500k -bufsize 9000k -pix_fmt yuv420p \
           -acodec aac -ab 128k -ar 44100 \
           -f flv "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}"
