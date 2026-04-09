@@ -16,8 +16,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Tools
-        run: sudo apt update && sudo apt install -y ffmpeg jq fonts-dejavu curl bc
+      - name: Fast Install Tools
+        run: sudo apt install -y fonts-dejavu bc
 
       - name: Get Real Subs and Calculate Bar
         id: subs
