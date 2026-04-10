@@ -8,4 +8,5 @@ jobs:
       - name: Get Auth URL
         run: |
           echo "Go to this URL in your browser:"
-          echo "https://accounts.google.com/o/oauth2/auth?client_id=${{ secrets.YOUTUBE_CLIENT_ID }}&redirect_uri=http://localhost&scope=https://www.googleapis.com/auth/youtube.upload&response_type=code&access_type=offline&prompt=consent"
+          echo "https://accounts.google.com/o/oauth2/auth?client_id=YOUR_NEW_WEB_CLIENT_ID&redirect_uri=http://localhost&scope=https://www.googleapis.com/auth/youtube.upload&response_type=code&access_type=offline&prompt=consent"
+          
