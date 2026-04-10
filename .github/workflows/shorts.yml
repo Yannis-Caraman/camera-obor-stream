@@ -39,7 +39,7 @@ jobs:
           echo "GEMINI RESPONSE: $RESPONSE"
 
           FACT=$(echo $RESPONSE | jq -r '.candidates[0].content.parts[0].text' | tr -d '\n' | tr -d '"' | tr -d "'" | sed 's/`//g' | cut -c1-300)
-          
+
           if [ "$FACT" = "null" ] || [ -z "$FACT" ]; then
             FACT="Did you know that Bucharest was once called the Little Paris of the East? In the early 20th century its grand boulevards elegant architecture and vibrant cafe culture drew comparisons to the French capital making it one of Europes most glamorous cities."
           fi
@@ -91,9 +91,15 @@ jobs:
 
       - name: Create Short with FFmpeg
         run: |
-          # Escape fact for ffmpeg
-          ESCAPED_FACT=$(echo "${{ env.fact }}" | sed "s/'/\\\'/g" | sed 's/:/\\:/g' | sed 's/,/\\,/g')
-          
+          python3 << 'EOF'
+          import textwrap
+          import os
+          fact = os.environ.get('fact', 'Did you know that Bucharest was once called the Little Paris of the East?')
+          wrapped = '\n'.join(textwrap.wrap(fact, width=35))
+          with open('fact_wrapped.txt', 'w') as f:
+              f.write(wrapped)
+          EOF
+
           ffmpeg -hide_banner -loglevel error \
           -stream_loop -1 -i background.mp4 \
           -i voice.mp3 \
@@ -104,10 +110,10 @@ jobs:
           text='Did you know?':x=(w-text_w)/2:y=150:fontsize=75:fontcolor=yellow:\
           shadowcolor=black:shadowx=3:shadowy=3, \
           drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:\
-          text='$ESCAPED_FACT':x=60:y=350:fontsize=48:fontcolor=white:\
+          textfile=fact_wrapped.txt:x=60:y=350:fontsize=45:fontcolor=white:\
           shadowcolor=black:shadowx=2:shadowy=2:\
           fix_bounds=true:line_spacing=20:\
-          expansion=none:wrap=960[final]" \
+          expansion=none[final]" \
           -map "[final]" -map 1:a \
           -t ${{ env.duration }} \
           -vcodec libx264 -preset veryfast -b:v 5000k -pix_fmt yuv420p \
