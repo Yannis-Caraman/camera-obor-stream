@@ -12,9 +12,15 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-ffmpeg-${{ runner.os }}
+
       - name: Install Tools
         run: |
-          sudo apt update && sudo apt install -y ffmpeg python3-pip curl jq bc fonts-dejavu
+          sudo apt update && sudo apt install -y ffmpeg fonts-dejavu bc jq curl
           pip3 install edge-tts requests --break-system-packages
 
       - name: Generate Fact with Gemini
