@@ -19,25 +19,32 @@ jobs:
 
       - name: Generate Fact with Gemini
         run: |
-          LANGUAGES=("en" "ro" "en")
           HOUR=$(date +%H)
           if [ "$HOUR" = "08" ]; then LANG="en"; elif [ "$HOUR" = "14" ]; then LANG="ro"; else LANG="en"; fi
 
           if [ "$LANG" = "en" ]; then
-            PROMPT="Generate a surprising and interesting 'Did you know?' fact about Bucharest, Romania. Keep it under 40 words. Start with 'Did you know that'. Return ONLY the fact, nothing else."
+            PROMPT="Generate a surprising and interesting Did you know fact about Bucharest Romania. Make it detailed and interesting, between 50 and 60 words. Start with Did you know that. Return ONLY the fact, nothing else, no quotes."
             VOICE="en-US-JennyNeural"
             TITLE_PREFIX="Did you know? Bucharest Facts"
           else
-            PROMPT="Generează un fapt surprinzător despre București, România. Maximum 40 de cuvinte. Începe cu 'Știai că'. Returnează DOAR faptul, nimic altceva."
+            PROMPT="Generează un fapt surprinzător și detaliat despre București România. Între 50 și 60 de cuvinte. Începe cu Știai că. Returnează DOAR faptul, nimic altceva, fără ghilimele."
             VOICE="ro-RO-AlinaNeural"
             TITLE_PREFIX="Știai că? Fapte despre București"
           fi
 
-          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
+          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d "{\"contents\":[{\"parts\":[{\"text\":\"$PROMPT\"}]}]}")
 
-          FACT=$(echo $RESPONSE | jq -r '.candidates[0].content.parts[0].text' | tr -d '\n' | sed 's/"/\\"/g')
+          echo "GEMINI RESPONSE: $RESPONSE"
+
+          FACT=$(echo $RESPONSE | jq -r '.candidates[0].content.parts[0].text' | tr -d '\n' | tr -d '"' | tr -d "'" | sed 's/`//g' | cut -c1-300)
+          
+          if [ "$FACT" = "null" ] || [ -z "$FACT" ]; then
+            FACT="Did you know that Bucharest was once called the Little Paris of the East? In the early 20th century its grand boulevards elegant architecture and vibrant cafe culture drew comparisons to the French capital making it one of Europes most glamorous cities."
+          fi
+
+          echo "FACT: $FACT"
           echo "fact=$FACT" >> $GITHUB_ENV
           echo "voice=$VOICE" >> $GITHUB_ENV
           echo "title=$TITLE_PREFIX" >> $GITHUB_ENV
@@ -45,19 +52,28 @@ jobs:
 
       - name: Generate Voiceover
         run: |
-          python3 -c "
+          python3 << 'EOF'
           import asyncio
           import edge_tts
+          import os
+
+          fact = os.environ.get('fact', '')
+          voice = os.environ.get('voice', 'en-US-JennyNeural')
+
           async def main():
-              tts = edge_tts.Communicate('${{ env.fact }}', '${{ env.voice }}')
+              tts = edge_tts.Communicate(fact, voice)
               await tts.save('voice.mp3')
           asyncio.run(main())
-          "
+          EOF
 
       - name: Get Bucharest Video from Pixabay
         run: |
-          RESPONSE=$(curl -s "https://pixabay.com/api/videos/?key=${{ secrets.PIXABAY_API_KEY }}&q=bucharest&per_page=20")
+          RESPONSE=$(curl -s "https://pixabay.com/api/videos/?key=${{ secrets.PIXABAY_API_KEY }}&q=bucharest+city&per_page=20&min_duration=20")
           COUNT=$(echo $RESPONSE | jq '.hits | length')
+          if [ "$COUNT" = "0" ]; then
+            RESPONSE=$(curl -s "https://pixabay.com/api/videos/?key=${{ secrets.PIXABAY_API_KEY }}&q=bucharest&per_page=20")
+            COUNT=$(echo $RESPONSE | jq '.hits | length')
+          fi
           RANDOM_INDEX=$((RANDOM % COUNT))
           VIDEO_URL=$(echo $RESPONSE | jq -r ".hits[$RANDOM_INDEX].videos.medium.url")
           curl -L "$VIDEO_URL" -o background.mp4
@@ -67,25 +83,31 @@ jobs:
         run: |
           DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 voice.mp3)
           DURATION_INT=$(echo "$DURATION" | cut -d'.' -f1)
-          TOTAL=$((DURATION_INT + 3))
+          TOTAL=$((DURATION_INT + 4))
+          if [ "$TOTAL" -lt 20 ]; then TOTAL=20; fi
+          if [ "$TOTAL" -gt 30 ]; then TOTAL=30; fi
           echo "duration=$TOTAL" >> $GITHUB_ENV
+          echo "Video will be $TOTAL seconds long"
 
       - name: Create Short with FFmpeg
         run: |
+          # Escape fact for ffmpeg
+          ESCAPED_FACT=$(echo "${{ env.fact }}" | sed "s/'/\\\'/g" | sed 's/:/\\:/g' | sed 's/,/\\,/g')
+          
           ffmpeg -hide_banner -loglevel error \
           -stream_loop -1 -i background.mp4 \
           -i voice.mp3 \
           -filter_complex "\
           [0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[bg]; \
-          [bg]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.4:t=fill[dark]; \
+          [bg]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.5:t=fill[dark]; \
           [dark]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:\
-          text='Did you know?':x=(w-text_w)/2:y=200:fontsize=70:fontcolor=white:\
+          text='Did you know?':x=(w-text_w)/2:y=150:fontsize=75:fontcolor=yellow:\
           shadowcolor=black:shadowx=3:shadowy=3, \
           drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:\
-          text='${{ env.fact }}':x=80:y=400:fontsize=45:fontcolor=white:\
+          text='$ESCAPED_FACT':x=60:y=350:fontsize=48:fontcolor=white:\
           shadowcolor=black:shadowx=2:shadowy=2:\
-          fix_bounds=true:line_spacing=15:\
-          expansion=none[final]" \
+          fix_bounds=true:line_spacing=20:\
+          expansion=none:wrap=960[final]" \
           -map "[final]" -map 1:a \
           -t ${{ env.duration }} \
           -vcodec libx264 -preset veryfast -b:v 5000k -pix_fmt yuv420p \
@@ -106,7 +128,6 @@ jobs:
         run: |
           DATE=$(date +"%d %B %Y")
           TITLE="${{ env.title }} - $DATE"
-          
           curl -s -X POST \
           "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status" \
           -H "Authorization: Bearer ${{ env.access_token }}" \
