@@ -1,0 +1,19 @@
+name: Exchange Token
+on:
+  workflow_dispatch:
+    inputs:
+      auth_code:
+        description: 'Paste your auth code here'
+        required: true
+jobs:
+  exchange:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get Refresh Token
+        run: |
+          curl -X POST https://oauth2.googleapis.com/token \
+          -d client_id=${{ secrets.YOUTUBE_CLIENT_ID }} \
+          -d client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }} \
+          -d code=${{ github.event.inputs.auth_code }} \
+          -d grant_type=authorization_code \
+          -d redirect_uri=http://localhost
