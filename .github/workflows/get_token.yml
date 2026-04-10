@@ -1,0 +1,11 @@
+name: Get YouTube Token
+on:
+  workflow_dispatch:
+jobs:
+  get-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get Auth URL
+        run: |
+          echo "Go to this URL in your browser:"
+          echo "https://accounts.google.com/o/oauth2/auth?client_id=${{ secrets.YOUTUBE_CLIENT_ID }}&redirect_uri=urn:ietf:wg:oauth:2.0:oob&scope=https://www.googleapis.com/auth/youtube.upload&response_type=code&access_type=offline"
