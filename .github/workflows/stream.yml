@@ -2,7 +2,10 @@ name: Camera Obor FULL-HD PRO 24/7
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 6 * * *'
+    - cron: '0 12 * * *'
+    - cron: '0 18 * * *'
+    - cron: '0 0 * * *'
 concurrency:
   group: camera-stream
   cancel-in-progress: true
@@ -44,3 +47,9 @@ jobs:
           -vcodec libx264 -preset veryfast -b:v 4500k -maxrate 4500k -bufsize 9000k -pix_fmt yuv420p -g 60 \
           -acodec aac -ab 128k -ar 44100 \
           -f flv "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}"
+      - name: Keep Repo Active
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git commit --allow-empty -m "keep alive"
+          git push
