@@ -29,5 +29,93 @@ jobs:
           if [ "$HOUR" = "08" ]; then LANG="en"; elif [ "$HOUR" = "14" ]; then LANG="ro"; else LANG="en"; fi
 
           if [ "$LANG" = "en" ]; then
-            PROMPT="Generate a unique surprising and lesser known Did you know fact about Bucharest Romania. Each ti
-            
+            cat > prompt.txt << 'ENDOFPROMPT'
+          Generate a unique surprising and lesser known Did you know fact about Bucharest Romania. Each time pick a completely different topic such as history architecture food culture people famous places events legends. Between 50 and 60 words. Start with Did you know that. Return ONLY the fact nothing else no quotes no asterisks.
+          ENDOFPROMPT
+            VOICE="en-US-JennyNeural"
+            TITLE_PREFIX="Did you know? Bucharest Facts"
+          else
+            cat > prompt.txt << 'ENDOFPROMPT'
+          Genereaza un fapt unic surprinzator si mai putin cunoscut despre Bucuresti Romania. De fiecare data alege un subiect complet diferit cum ar fi istorie arhitectura mancare cultura oameni celebri locuri faimoase evenimente legende. Intre 50 si 60 de cuvinte. Incepe cu Stiai ca. Returneaza DOAR faptul nimic altceva fara ghilimele fara asteriscuri.
+          ENDOFPROMPT
+            VOICE="ro-RO-AlinaNeural"
+            TITLE_PREFIX="Stiai ca? Fapte despre Bucuresti"
+          fi
+
+          PROMPT=$(cat prompt.txt | tr -d '\n' | sed 's/"/\\"/g')
+
+          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"contents\":[{\"parts\":[{\"text\":\"$PROMPT\"}]}]}")
+
+          echo "GEMINI RESPONSE: $RESPONSE"
+
+          FACT=$(echo $RESPONSE | jq -r '.candidates[0].content.parts[0].text' | tr -d '\n' | tr -d '"' | tr -d "'" | sed 's/`//g' | sed 's/\*//g' | cut -c1-300)
+
+          if [ "$FACT" = "null" ] || [ -z "$FACT" ]; then
+            echo "Gemini failed to respond!"
+            exit 1
+          fi
+
+          echo "FACT: $FACT"
+          echo "fact=$FACT" >> $GITHUB_ENV
+          echo "voice=$VOICE" >> $GITHUB_ENV
+          echo "title=$TITLE_PREFIX" >> $GITHUB_ENV
+          echo "lang=$LANG" >> $GITHUB_ENV
+
+      - name: Generate Voiceover
+        run: |
+          python3 << 'EOF'
+          import asyncio
+          import edge_tts
+          import os
+
+          fact = os.environ.get('fact', '')
+          voice = os.environ.get('voice', 'en-US-JennyNeural')
+
+          async def main():
+              tts = edge_tts.Communicate(fact, voice)
+              await tts.save('voice.mp3')
+          asyncio.run(main())
+          EOF
+
+      - name: Get Bucharest Video from Pixabay
+        run: |
+          RESPONSE=$(curl -s "https://pixabay.com/api/videos/?key=${{ secrets.PIXABAY_API_KEY }}&q=bucharest+city&per_page=20&min_duration=20")
+          COUNT=$(echo $RESPONSE | jq '.hits | length')
+          if [ "$COUNT" = "0" ]; then
+            RESPONSE=$(curl -s "https://pixabay.com/api/videos/?key=${{ secrets.PIXABAY_API_KEY }}&q=bucharest&per_page=20")
+            COUNT=$(echo $RESPONSE | jq '.hits | length')
+          fi
+          RANDOM_INDEX=$((RANDOM % COUNT))
+          VIDEO_URL=$(echo $RESPONSE | jq -r ".hits[$RANDOM_INDEX].videos.medium.url")
+          curl -L "$VIDEO_URL" -o background.mp4
+          echo "Downloaded video: $VIDEO_URL"
+
+      - name: Get Voice Duration
+        run: |
+          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 voice.mp3)
+          DURATION_INT=$(echo "$DURATION" | cut -d'.' -f1)
+          TOTAL=$((DURATION_INT + 4))
+          if [ "$TOTAL" -lt 20 ]; then TOTAL=20; fi
+          if [ "$TOTAL" -gt 30 ]; then TOTAL=30; fi
+          echo "duration=$TOTAL" >> $GITHUB_ENV
+          echo "Video will be $TOTAL seconds long"
+
+      - name: Create Short with FFmpeg
+        run: |
+          python3 << 'EOF'
+          import textwrap
+          import os
+          fact = os.environ.get('fact', '')
+          wrapped = '\n'.join(textwrap.wrap(fact, width=35))
+          with open('fact_wrapped.txt', 'w') as f:
+              f.write(wrapped)
+          EOF
+
+          ffmpeg -hide_banner -loglevel error \
+          -stream_loop -1 -i background.mp4 \
+          -i voice.mp3 \
+          -filter_complex "\
+          [0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[bg]; \
+          [bg]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.5:t=fill[dark]; \
