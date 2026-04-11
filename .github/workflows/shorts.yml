@@ -29,11 +29,11 @@ jobs:
           if [ "$HOUR" = "08" ]; then LANG="en"; elif [ "$HOUR" = "14" ]; then LANG="ro"; else LANG="en"; fi
 
           if [ "$LANG" = "en" ]; then
-            PROMPT="Generate a surprising and interesting Did you know fact about Bucharest Romania. Make it detailed and interesting, between 50 and 60 words. Start with Did you know that. Return ONLY the fact, nothing else, no quotes."
+            PROMPT="Generate a unique surprising and lesser known Did you know fact about Bucharest Romania. Each time pick a completely different topic such as history architecture food culture people famous places events legends. Between 50 and 60 words. Start with Did you know that. Return ONLY the fact nothing else no quotes no asterisks."
             VOICE="en-US-JennyNeural"
             TITLE_PREFIX="Did you know? Bucharest Facts"
           else
-            PROMPT="Generează un fapt surprinzător și detaliat despre București România. Între 50 și 60 de cuvinte. Începe cu Știai că. Returnează DOAR faptul, nimic altceva, fără ghilimele."
+            PROMPT="Generează un fapt unic surprinzător și mai puțin cunoscut despre București România. De fiecare dată alege un subiect complet diferit cum ar fi istorie arhitectură mâncare cultură oameni celebri locuri faimoase evenimente legende. Între 50 și 60 de cuvinte. Începe cu Știai că. Returnează DOAR faptul nimic altceva fără ghilimele fără asteriscuri."
             VOICE="ro-RO-AlinaNeural"
             TITLE_PREFIX="Știai că? Fapte despre București"
           fi
@@ -44,10 +44,11 @@ jobs:
 
           echo "GEMINI RESPONSE: $RESPONSE"
 
-          FACT=$(echo $RESPONSE | jq -r '.candidates[0].content.parts[0].text' | tr -d '\n' | tr -d '"' | tr -d "'" | sed 's/`//g' | cut -c1-300)
+          FACT=$(echo $RESPONSE | jq -r '.candidates[0].content.parts[0].text' | tr -d '\n' | tr -d '"' | tr -d "'" | sed 's/`//g' | sed 's/\*//g' | cut -c1-300)
 
           if [ "$FACT" = "null" ] || [ -z "$FACT" ]; then
-            FACT="Did you know that Bucharest was once called the Little Paris of the East? In the early 20th century its grand boulevards elegant architecture and vibrant cafe culture drew comparisons to the French capital making it one of Europes most glamorous cities."
+            echo "Gemini failed to respond!"
+            exit 1
           fi
 
           echo "FACT: $FACT"
@@ -100,7 +101,7 @@ jobs:
           python3 << 'EOF'
           import textwrap
           import os
-          fact = os.environ.get('fact', 'Did you know that Bucharest was once called the Little Paris of the East?')
+          fact = os.environ.get('fact', '')
           wrapped = '\n'.join(textwrap.wrap(fact, width=35))
           with open('fact_wrapped.txt', 'w') as f:
               f.write(wrapped)
@@ -138,8 +139,7 @@ jobs:
 
       - name: Upload Short to YouTube
         run: |
-          DATE=$(date +"%d %B %Y")
-          TITLE="${{ env.title }} - $DATE"
+          TITLE="${{ env.title }}"
           curl -s -X POST \
           "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status" \
           -H "Authorization: Bearer ${{ env.access_token }}" \
@@ -150,5 +150,5 @@ jobs:
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git commit --allow-empty -m "shorts generated"
+          git commit --allow-empty -m "shorts generated $(date)"
           git push
