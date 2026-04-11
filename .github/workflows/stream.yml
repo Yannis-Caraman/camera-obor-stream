@@ -1,4 +1,5 @@
 name: Camera Obor FULL-HD PRO 24/7
+
 on:
   workflow_dispatch:
   schedule:
@@ -6,17 +7,22 @@ on:
     - cron: '0 12 * * *'
     - cron: '0 18 * * *'
     - cron: '0 0 * * *'
+
 concurrency:
   group: camera-stream
-  cancel-in-progress: true
+  cancel-in-progress: false
+
 jobs:
   run-stream:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
       - name: Install Tools
         run: sudo apt update && sudo apt install -y ffmpeg fonts-dejavu bc jq curl
+
       - name: Get Real Subs and Calculate Bar
         id: subs
         run: |
@@ -28,6 +34,7 @@ jobs:
           PERCENT_INT=$(echo "($SUBS * 100) / $TARGET" | bc)
           echo "$SUBS ($PERCENT_INT%)" > stats.txt
           echo "percent=$PERCENT" >> $GITHUB_OUTPUT
+
       - name: Start Streaming (Live + ChromaKey MP4 Overlay + Music)
         run: |
           timeout 21000 ffmpeg -hide_banner -loglevel error \
@@ -47,8 +54,10 @@ jobs:
           -vcodec libx264 -preset veryfast -b:v 4500k -maxrate 4500k -bufsize 9000k -pix_fmt yuv420p -g 60 \
           -acodec aac -ab 128k -ar 44100 \
           -f flv "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}" || true
+
       - name: Wait 10 minutes
         run: sleep 600
+
       - name: Keep Repo Active
         run: |
           git config user.email "actions@github.com"
