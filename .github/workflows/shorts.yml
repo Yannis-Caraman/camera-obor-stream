@@ -29,20 +29,18 @@ jobs:
           if [ "$HOUR" = "08" ]; then LANG="en"; elif [ "$HOUR" = "14" ]; then LANG="ro"; else LANG="en"; fi
 
           if [ "$LANG" = "en" ]; then
-            echo "Generate a unique surprising and lesser known Did you know fact about Bucharest Romania. Each time pick a completely different topic such as history architecture food culture people famous places events legends. Between 40 and 50 words. Start with Did you know that. Return ONLY the fact nothing else no quotes no asterisks." > prompt.txt
+            echo "Generate a unique surprising Did you know fact about Bucharest Romania. Pick a different topic each time: history architecture food culture people famous places events legends. Between 40 and 50 words. Start with Did you know that. Return ONLY the fact no quotes no asterisks." > prompt.txt
             VOICE="en-US-JennyNeural"
             TITLE="Did you know? Bucharest Facts #Shorts"
-            DESCRIPTION="Amazing facts about Bucharest Romania! Like and subscribe for daily Bucharest facts! #Bucharest #Romania #DidYouKnow #Shorts #Facts #Travel #Europe #Romanian #BucharestFacts #RomaniaTravel #TravelShorts #Amazing #History #Culture #Tourism #VisitRomania #EasternEurope #Balkans #CityFacts"
           else
-            echo "Genereaza un fapt unic surprinzator despre Bucuresti Romania. Alege un subiect diferit cum ar fi istorie arhitectura mancare cultura oameni locuri evenimente. Intre 40 si 50 de cuvinte. Incepe cu Stiai ca. Foloseste diacritice corecte: ă â î ș ț. Returneaza DOAR faptul nimic altceva." > prompt.txt
+            echo "Genereaza un fapt unic surprinzator despre Bucuresti Romania. Subiect diferit de fiecare data: istorie arhitectura mancare cultura oameni locuri evenimente. Intre 40 si 50 de cuvinte. Incepe cu Stiai ca. Diacritice corecte. Returneaza DOAR faptul." > prompt.txt
             VOICE="ro-RO-AlinaNeural"
             TITLE="Stiai ca? Fapte despre Bucuresti #Shorts"
-            DESCRIPTION="Fapte uimitoare despre Bucuresti Romania! Da like si aboneaza-te pentru fapte zilnice! #Bucuresti #Romania #StiaiCa #Shorts #Fapte #Travel #Europa #Romanesc #FapteBucuresti #RomaniaTurism #Istorie #Cultura #TurismRomania #EuropaDeEst #OraseFrumoase"
           fi
 
           PROMPT=$(cat prompt.txt | tr -d '\n' | sed 's/"/\\"/g')
 
-          RESPONSE=$(curl -s "[generativelanguage.googleapis.com](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${{) secrets.GEMINI_API_KEY }}" \
+          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d "{\"contents\":[{\"parts\":[{\"text\":\"$PROMPT\"}]}]}")
 
@@ -59,7 +57,6 @@ jobs:
           echo "fact=$FACT" >> $GITHUB_ENV
           echo "voice=$VOICE" >> $GITHUB_ENV
           echo "title=$TITLE" >> $GITHUB_ENV
-          echo "description=$DESCRIPTION" >> $GITHUB_ENV
           echo "lang=$LANG" >> $GITHUB_ENV
 
       - name: Generate Voiceover with Word Timestamps
@@ -96,10 +93,6 @@ jobs:
                   json.dump(words, f)
 
               print(f"Generated {len(words)} word timestamps")
-              
-              # Debug - arată primele câteva cuvinte
-              for w in words[:5]:
-                  print(f"  {w['word']}: {w['start']:.2f}s - {w['start'] + w['duration']:.2f}s")
 
           asyncio.run(main())
           EOF
@@ -114,7 +107,6 @@ jobs:
               words = json.load(f)
 
           if not words:
-              print("AVERTISMENT: Nu s-au găsit cuvinte în words.json!")
               with open("subtitle_filters.txt", "w") as f:
                   f.write("")
               exit(0)
@@ -131,21 +123,14 @@ jobs:
 
           filters = []
           for g in groups:
-              # Curăță textul pentru ffmpeg - elimină toate caracterele problematice
               text = g["text"]
-              # Elimină caractere care pot strica ffmpeg filter
-              text = re.sub(r"[\\'\";:,\[\](){}]", "", text)
-              # Înlocuiește apostrof cu spațiu
-              text = text.replace("'", " ")
-              # Elimină spații multiple
+              text = re.sub(r"[\\'\";:\[\](){}]", "", text)
+              text = re.sub(r',', '', text)
               text = re.sub(r'\s+', ' ', text).strip()
-              
               if not text:
                   continue
-
               start = g["start"]
               end = g["end"]
-
               f_str = (
                   f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
                   f"text='{text}':"
@@ -163,10 +148,6 @@ jobs:
               f.write(",".join(filters))
 
           print(f"Generated {len(filters)} subtitle filters")
-          
-          # Debug - arată primele 3 filtre
-          for filt in filters[:3]:
-              print(f"  {filt[:100]}...")
           EOF
 
       - name: Download Videos from Pixabay
@@ -179,57 +160,49 @@ jobs:
           import sys
 
           api_key = os.environ.get('PIXABAY_API_KEY', '')
-          if not api_key:
-              print("EROARE: PIXABAY_API_KEY lipsește!")
-              sys.exit(1)
 
           queries = [
-              "bucharest city", "colorful street market", "food cooking fire",
-              "crowd festival colorful", "city lights colorful", "street food",
-              "vibrant market", "romania traditional", "bucharest architecture",
+              "bucharest city",
+              "colorful street market",
+              "food cooking fire",
+              "crowd festival colorful",
+              "city lights colorful",
+              "street food",
+              "vibrant market",
+              "romania traditional",
+              "bucharest architecture",
               "happy people city"
           ]
 
           random.shuffle(queries)
 
           videos = []
-          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-
           for query in queries:
               if len(videos) >= 6:
                   break
-              url = f"[pixabay.com](https://pixabay.com/api/videos/?key={api_key}&q={query.replace()' ', '+')}&per_page=10&min_duration=3"
+              url = f"https://pixabay.com/api/videos/?key={api_key}&q={query.replace(' ', '+')}&per_page=10&min_duration=3"
               try:
-                  req = urllib.request.Request(url, headers=headers)
-                  with urllib.request.urlopen(req) as r:
+                  with urllib.request.urlopen(url) as r:
                       data = json.loads(r.read())
                       hits = data.get("hits", [])
                       if hits:
                           pick = random.choice(hits)
                           videos.append(pick)
-                          print(f"Găsit: {pick['tags'][:50]}")
+                          print(f"Found: {pick['tags'][:50]}")
               except Exception as e:
-                  print(f"Eroare la căutarea '{query}': {e}")
+                  print(f"Error: {e}")
 
           if not videos:
-              print("EROARE: Nu s-a putut găsi niciun video pe Pixabay!")
+              print("No videos found!")
               sys.exit(1)
 
-          downloaded = 0
           for i, video in enumerate(videos[:6]):
               try:
                   video_url = video["videos"]["medium"]["url"]
-                  req = urllib.request.Request(video_url, headers=headers)
-                  with urllib.request.urlopen(req) as response, open(f"clip{i+1}.mp4", 'wb') as out_file:
-                      out_file.write(response.read())
-                  print(f"Descărcat clip{i+1}.mp4")
-                  downloaded += 1
+                  urllib.request.urlretrieve(video_url, f"clip{i+1}.mp4")
+                  print(f"Downloaded clip{i+1}.mp4")
               except Exception as e:
-                  print(f"Eroare la descărcarea clipului {i+1}: {e}")
-
-          if downloaded == 0:
-              print("EROARE FATALĂ: Niciun video nu a fost descărcat cu succes!")
-              sys.exit(1)
+                  print(f"Error: {e}")
           EOF
         env:
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
@@ -244,125 +217,89 @@ jobs:
           echo "duration=$TOTAL" >> $GITHUB_ENV
           echo "Video duration: $TOTAL seconds"
 
-      - name: Trim and Prepare Clips
+      - name: Prepare Clips
         run: |
           python3 << 'EOF'
           import os
           import subprocess
+          import random
           import sys
 
           clips = sorted([f for f in os.listdir('.') if f.startswith('clip') and f.endswith('.mp4')])
-          
           if not clips:
-              print("EROARE: Nu există clipuri!")
+              print("No clips!")
               sys.exit(1)
 
           duration = int(os.environ.get('duration', 30))
-          num_clips = len(clips)
-          clip_duration = max(3, duration // num_clips + 1)  # durata per clip
+          clip_duration = max(3, duration // len(clips) + 1)
 
-          print(f"Total duration: {duration}s, {num_clips} clips, ~{clip_duration}s each")
-
-          trimmed_clips = []
+          trimmed = []
           for i, clip in enumerate(clips):
               output = f"trimmed_{i+1}.mp4"
-              
-              # Obține durata clipului original
               result = subprocess.run(
-                  ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', 
+                  ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
                    '-of', 'default=noprint_wrappers=1:nokey=1', clip],
-                  capture_output=True, text=True
-              )
-              
+                  capture_output=True, text=True)
               try:
-                  original_duration = float(result.stdout.strip())
+                  orig_dur = float(result.stdout.strip())
               except:
-                  original_duration = 10
-              
-              # Calculează un start random pentru varietate
-              max_start = max(0, original_duration - clip_duration - 0.5)
-              import random
+                  orig_dur = 10
+              max_start = max(0, orig_dur - clip_duration - 0.5)
               start_time = random.uniform(0, max_start) if max_start > 0 else 0
-              
-              # Taie clipul și scalează la 9:16
               cmd = [
                   'ffmpeg', '-hide_banner', '-loglevel', 'error',
-                  '-ss', str(start_time),
-                  '-i', clip,
+                  '-ss', str(start_time), '-i', clip,
                   '-t', str(clip_duration),
-                  '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1',
-                  '-c:v', 'libx264', '-preset', 'veryfast',
-                  '-an',  # fără audio
-                  '-y', output
+                  '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=brightness=0.06:saturation=1.5:contrast=1.08,setsar=1',
+                  '-c:v', 'libx264', '-preset', 'veryfast', '-an', '-y', output
               ]
-              
               subprocess.run(cmd, check=True)
-              trimmed_clips.append(output)
-              print(f"Trimmed {clip} -> {output} (start: {start_time:.1f}s, dur: {clip_duration}s)")
+              trimmed.append(output)
+              print(f"Trimmed {clip} -> {output}")
 
-          # Creează lista pentru concat
           with open('clips.txt', 'w') as f:
-              for clip in trimmed_clips:
+              for clip in trimmed:
                   f.write(f"file '{clip}'\n")
-
-          print(f"Pregătite {len(trimmed_clips)} clipuri tăiate")
+          print(f"Ready: {len(trimmed)} clips")
           EOF
 
       - name: Combine Background Videos
         run: |
-          ffmpeg -hide_banner -loglevel warning \
+          ffmpeg -hide_banner -loglevel error \
           -f concat -safe 0 -i clips.txt \
           -t ${{ env.duration }} \
-          -vf "eq=brightness=0.06:saturation=1.5:contrast=1.08" \
           -c:v libx264 -preset veryfast -an \
           -y combined_bg.mp4
-          
-          echo "Combined video created:"
-          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 combined_bg.mp4
 
       - name: Create Final Short
         run: |
-          # Citește filtrele de subtitrare
-          SUBTITLE_FILTERS=""
-          if [ -f "subtitle_filters.txt" ]; then
-            SUBTITLE_FILTERS=$(cat subtitle_filters.txt)
-          fi
-
-          echo "Subtitle filters length: ${#SUBTITLE_FILTERS}"
-
-          # Header text bazat pe limbă
+          SUBTITLE_FILTERS=$(cat subtitle_filters.txt)
           if [ "${{ env.lang }}" = "ro" ]; then
-            HEADER_TEXT="STIAI CA?"
+            HEADER="STIAI CA?"
           else
-            HEADER_TEXT="DID YOU KNOW?"
+            HEADER="DID YOU KNOW?"
           fi
 
-          # Construiește filter_complex
-          if [ -n "$SUBTITLE_FILTERS" ] && [ "$SUBTITLE_FILTERS" != "" ]; then
-            echo "Using dynamic subtitles"
-            FILTER_COMPLEX="[0:v]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.12:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${HEADER_TEXT}':x=(w-text_w)/2:y=80:fontsize=60:fontcolor=white:borderw=3:bordercolor=black,${SUBTITLE_FILTERS}[final];[1:a]volume=0.12[music];[2:a]volume=1.0[voice];[music][voice]amix=inputs=2:duration=first:weights=1 5[aout]"
+          if [ -n "$SUBTITLE_FILTERS" ]; then
+            FILTER="[0:v]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.12:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${HEADER}':x=(w-text_w)/2:y=80:fontsize=60:fontcolor=white:borderw=3:bordercolor=black,${SUBTITLE_FILTERS}[final];[1:a]volume=0.12[music];[2:a]volume=1.0[voice];[music][voice]amix=inputs=2:duration=first:weights=1 5[aout]"
           else
-            echo "No subtitles - using header only"
-            FILTER_COMPLEX="[0:v]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.12:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${HEADER_TEXT}':x=(w-text_w)/2:y=80:fontsize=60:fontcolor=white:borderw=3:bordercolor=black[final];[1:a]volume=0.12[music];[2:a]volume=1.0[voice];[music][voice]amix=inputs=2:duration=first:weights=1 5[aout]"
+            FILTER="[0:v]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.12:t=fill,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${HEADER}':x=(w-text_w)/2:y=80:fontsize=60:fontcolor=white:borderw=3:bordercolor=black[final];[1:a]volume=0.12[music];[2:a]volume=1.0[voice];[music][voice]amix=inputs=2:duration=first:weights=1 5[aout]"
           fi
 
-          ffmpeg -hide_banner -loglevel warning \
+          ffmpeg -hide_banner -loglevel error \
           -i combined_bg.mp4 \
           -stream_loop -1 -i music1.mp3 \
           -i voice.mp3 \
-          -filter_complex "$FILTER_COMPLEX" \
+          -filter_complex "$FILTER" \
           -map "[final]" -map "[aout]" \
           -t ${{ env.duration }} \
           -c:v libx264 -preset veryfast -b:v 6000k -pix_fmt yuv420p \
           -c:a aac -b:a 192k -ar 44100 \
           -y short_output.mp4
-          
-          echo "Final video created!"
-          ls -la short_output.mp4
 
       - name: Get YouTube Access Token
         run: |
-          TOKEN_RESPONSE=$(curl -s -X POST [oauth2.googleapis.com](https://oauth2.googleapis.com/token) \
+          TOKEN_RESPONSE=$(curl -s -X POST https://oauth2.googleapis.com/token \
             -d client_id=${{ secrets.YOUTUBE_CLIENT_ID }} \
             -d client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }} \
             -d refresh_token=${{ secrets.YOUTUBE_REFRESH_TOKEN }} \
@@ -373,11 +310,10 @@ jobs:
       - name: Upload Short to YouTube
         run: |
           TITLE="${{ env.title }}"
-          DESC="${{ env.description }}"
           curl -s -X POST \
-          "[googleapis.com](https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status)" \
+          "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status" \
           -H "Authorization: Bearer ${{ env.access_token }}" \
-          -F "metadata={\"snippet\":{\"title\":\"$TITLE\",\"description\":\"$DESC\",\"tags\":[\"bucharest\",\"romania\",\"didyouknow\",\"shorts\",\"facts\",\"travel\",\"europe\",\"history\",\"culture\"],\"categoryId\":\"27\"},\"status\":{\"privacyStatus\":\"public\",\"selfDeclaredMadeForKids\":false}};type=application/json" \
+          -F "metadata={\"snippet\":{\"title\":\"$TITLE\",\"description\":\"Amazing facts about Bucharest Romania! #Shorts #Bucharest #Romania #DidYouKnow #Facts #Travel #Europe #History #Culture\",\"tags\":[\"bucharest\",\"romania\",\"didyouknow\",\"shorts\",\"facts\",\"travel\",\"europe\",\"history\",\"culture\"],\"categoryId\":\"27\"},\"status\":{\"privacyStatus\":\"public\",\"selfDeclaredMadeForKids\":false}};type=application/json" \
           -F "video=@short_output.mp4;type=video/mp4"
 
       - name: Keep Repo Active
