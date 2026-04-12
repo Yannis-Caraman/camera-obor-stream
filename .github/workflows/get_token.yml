@@ -1,4 +1,4 @@
-name: Exchange Token
+name: Get YouTube Token
 on:
   workflow_dispatch:
     inputs:
