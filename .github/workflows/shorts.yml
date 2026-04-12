@@ -159,45 +159,56 @@ jobs:
           import json
           import random
           import os
+          import sys
 
           api_key = os.environ.get('PIXABAY_API_KEY', '')
+          if not api_key:
+              print("EROARE: PIXABAY_API_KEY lipsește!")
+              sys.exit(1)
 
           queries = [
-              "bucharest city",
-              "colorful street market",
-              "food cooking fire",
-              "crowd festival colorful",
-              "city lights colorful",
-              "street food",
-              "vibrant market",
-              "romania traditional",
-              "bucharest architecture",
+              "bucharest city", "colorful street market", "food cooking fire",
+              "crowd festival colorful", "city lights colorful", "street food",
+              "vibrant market", "romania traditional", "bucharest architecture",
               "happy people city"
           ]
 
           random.shuffle(queries)
 
           videos = []
-          for query in queries[:6]:
+          for query in queries:
+              if len(videos) >= 6:
+                  break
               url = f"https://pixabay.com/api/videos/?key={api_key}&q={query.replace(' ', '+')}&per_page=10&min_duration=3"
               try:
-                  with urllib.request.urlopen(url) as r:
+                  req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+                  with urllib.request.urlopen(req) as r:
                       data = json.loads(r.read())
                       hits = data.get("hits", [])
                       if hits:
                           pick = random.choice(hits)
                           videos.append(pick)
-                          print(f"Found: {pick['tags'][:50]}")
+                          print(f"Găsit: {pick['tags'][:50]}")
               except Exception as e:
-                  print(f"Error: {e}")
+                  print(f"Eroare la căutarea '{query}': {e}")
 
+          if not videos:
+              print("EROARE: Nu s-a putut găsi niciun video pe Pixabay!")
+              sys.exit(1)
+
+          downloaded = 0
           for i, video in enumerate(videos[:6]):
               try:
                   video_url = video["videos"]["medium"]["url"]
                   urllib.request.urlretrieve(video_url, f"clip{i+1}.mp4")
-                  print(f"Downloaded clip{i+1}.mp4")
+                  print(f"Descărcat clip{i+1}.mp4")
+                  downloaded += 1
               except Exception as e:
-                  print(f"Error: {e}")
+                  print(f"Eroare la descărcarea clipului {i+1}: {e}")
+
+          if downloaded == 0:
+              print("EROARE FATALĂ: Niciun video nu a fost descărcat cu succes!")
+              sys.exit(1)
           EOF
         env:
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
@@ -216,11 +227,17 @@ jobs:
         run: |
           python3 << 'EOF'
           import os
+          import sys
           clips = sorted([f for f in os.listdir('.') if f.startswith('clip') and f.endswith('.mp4')])
+          
+          if not clips:
+              print("EROARE FATALĂ: Nu există fișiere clip.mp4 în folder pentru a fi combinate!")
+              sys.exit(1)
+              
           with open('clips.txt', 'w') as f:
               for clip in clips:
                   f.write(f"file '{clip}'\n")
-          print(f"Clips: {clips}")
+          print(f"Clips pregătite: {clips}")
           EOF
 
       - name: Combine Background Videos
