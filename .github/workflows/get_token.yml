@@ -1,19 +1,11 @@
 name: Get YouTube Token
 on:
   workflow_dispatch:
-    inputs:
-      auth_code:
-        description: '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'
-        required: true
 jobs:
-  exchange:
+  get-token:
     runs-on: ubuntu-latest
     steps:
-      - name: Get Refresh Token
+      - name: Get Auth URL
         run: |
-          curl -X POST https://oauth2.googleapis.com/token \
-          -d client_id=1027136883356-nl91lj9s047nu5l2snu8he6k1h23j7bq.apps.googleusercontent.com \
-          -d client_secret=PUNE_AICI_NOUL_SECRET \
-          -d code=${{ github.event.inputs.auth_code }} \
-          -d grant_type=authorization_code \
-          -d redirect_uri=http://localhost
+          echo "Go to this URL in your browser:"
+          echo "https://accounts.google.com/o/oauth2/auth?client_id=1027136883356-nl91lj9s047nu5l2snu8he6k1h23j7bq.apps.googleusercontent.com&redirect_uri=http://localhost&scope=https://www.googleapis.com/auth/youtube&response_type=code&access_type=offline&prompt=consent"
