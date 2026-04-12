@@ -257,19 +257,18 @@ jobs:
         run: |
           SUBTITLE_FILTERS=$(cat subtitle_filters.txt)
 
+          if [ -z "$SUBTITLE_FILTERS" ]; then
+            echo "Avertisment: Nu s-au detectat subtitrari dinamice (edge-tts nu a returnat markerii de timp). Randam fara cuvinte pe ecran."
+            FILTER_COMPLEX="[0:v]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.15:t=fill[darkened];[darkened]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='DID YOU KNOW':x=(w-text_w)/2:y=100:fontsize=65:fontcolor=white:borderw=4:bordercolor=black[final];[1:a]volume=0.15[music];[2:a]volume=1.0[voice];[music][voice]amix=inputs=2:duration=first:weights=1 6[aout]"
+          else
+            FILTER_COMPLEX="[0:v]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.15:t=fill[darkened];[darkened]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='DID YOU KNOW':x=(w-text_w)/2:y=100:fontsize=65:fontcolor=white:borderw=4:bordercolor=black,${SUBTITLE_FILTERS}[final];[1:a]volume=0.15[music];[2:a]volume=1.0[voice];[music][voice]amix=inputs=2:duration=first:weights=1 6[aout]"
+          fi
+
           ffmpeg -hide_banner -loglevel error \
           -i combined_bg.mp4 \
           -stream_loop -1 -i music1.mp3 \
           -i voice.mp3 \
-          -filter_complex "\
-          [0:v]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.15:t=fill[darkened];\
-          [darkened]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:\
-          text='DID YOU KNOW':x=(w-text_w)/2:y=100:fontsize=65:fontcolor=white:\
-          borderw=4:bordercolor=black,\
-          ${SUBTITLE_FILTERS}[final];\
-          [1:a]volume=0.15[music];\
-          [2:a]volume=1.0[voice];\
-          [music][voice]amix=inputs=2:duration=first:weights=1 6[aout]" \
+          -filter_complex "$FILTER_COMPLEX" \
           -map "[final]" -map "[aout]" \
           -t ${{ env.duration }} \
           -vcodec libx264 -preset veryfast -b:v 6000k -pix_fmt yuv420p \
