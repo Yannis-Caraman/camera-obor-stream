@@ -1,0 +1,289 @@
+name: Auto Shorts Bucharest
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * *'
+    - cron: '0 14 * * *'
+    - cron: '0 20 * * *'
+jobs:
+  create-short:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-ffmpeg-${{ runner.os }}
+
+      - name: Install Tools
+        run: |
+          sudo apt update && sudo apt install -y ffmpeg fonts-dejavu bc jq curl python3-pip
+          pip3 install edge-tts requests --break-system-packages
+
+      - name: Generate Fact with Gemini
+        run: |
+          HOUR=$(date +%H)
+          if [ "$HOUR" = "08" ]; then LANG="en"; elif [ "$HOUR" = "14" ]; then LANG="ro"; else LANG="en"; fi
+
+          if [ "$LANG" = "en" ]; then
+            cat > prompt.txt << 'ENDOFPROMPT'
+          Generate a unique surprising and lesser known Did you know fact about Bucharest Romania. Each time pick a completely different topic such as history architecture food culture people famous places events legends. Between 40 and 50 words. Start with Did you know that. Return ONLY the fact nothing else no quotes no asterisks.
+          ENDOFPROMPT
+            VOICE="en-US-JennyNeural"
+            TITLE="Did you know? Bucharest Facts #Shorts"
+            DESCRIPTION="Amazing facts about Bucharest Romania! Like and subscribe for daily Bucharest facts!
+
+#Bucharest #Romania #DidYouKnow #Shorts #Facts #Travel #Europe #Romanian #BucharestFacts #RomaniaTravel #TravelShorts #Amazing #History #Culture #Tourism #VisitRomania #EasternEurope #Balkans #CityFacts"
+          else
+            cat > prompt.txt << 'ENDOFPROMPT'
+          Genereaza un fapt unic surprinzator despre Bucuresti Romania. Alege un subiect diferit cum ar fi istorie arhitectura mancare cultura oameni locuri evenimente. Intre 40 si 50 de cuvinte. Incepe cu Stiai ca. Foloseste diacritice corecte: ă â î ș ț. Returneaza DOAR faptul nimic altceva.
+          ENDOFPROMPT
+            VOICE="ro-RO-AlinaNeural"
+            TITLE="Stiai ca? Fapte despre Bucuresti #Shorts"
+            DESCRIPTION="Fapte uimitoare despre Bucuresti Romania! Da like si aboneaza-te pentru fapte zilnice!
+
+#Bucuresti #Romania #StiaiCa #Shorts #Fapte #Travel #Europa #Romanesc #FapteBucuresti #RomaniaTurism #Istorie #Cultura #TurismRomania #EuropaDeEst #OraseFrumoase"
+          fi
+
+          PROMPT=$(cat prompt.txt | tr -d '\n' | sed 's/"/\\"/g')
+
+          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"contents\":[{\"parts\":[{\"text\":\"$PROMPT\"}]}]}")
+
+          echo "GEMINI RESPONSE: $RESPONSE"
+
+          FACT=$(echo $RESPONSE | jq -r '.candidates[0].content.parts[0].text' | tr -d '\n' | tr -d '"' | sed 's/`//g' | sed 's/\*//g' | cut -c1-300)
+
+          if [ "$FACT" = "null" ] || [ -z "$FACT" ]; then
+            echo "Gemini failed!"
+            exit 1
+          fi
+
+          echo "FACT: $FACT"
+          echo "fact=$FACT" >> $GITHUB_ENV
+          echo "voice=$VOICE" >> $GITHUB_ENV
+          echo "title=$TITLE" >> $GITHUB_ENV
+          echo "lang=$LANG" >> $GITHUB_ENV
+
+      - name: Generate Voiceover with Word Timestamps
+        run: |
+          python3 << 'EOF'
+          import asyncio
+          import edge_tts
+          import os
+          import json
+
+          fact = os.environ.get('fact', '')
+          voice = os.environ.get('voice', 'en-US-JennyNeural')
+
+          async def main():
+              tts = edge_tts.Communicate(fact, voice)
+              words = []
+              audio_chunks = []
+
+              async for chunk in tts.stream():
+                  if chunk["type"] == "audio":
+                      audio_chunks.append(chunk["data"])
+                  elif chunk["type"] == "WordBoundary":
+                      words.append({
+                          "word": chunk["text"],
+                          "start": chunk["offset"] / 10000000,
+                          "duration": chunk["duration"] / 10000000
+                      })
+
+              with open("voice.mp3", "wb") as f:
+                  for chunk in audio_chunks:
+                      f.write(chunk)
+
+              with open("words.json", "w") as f:
+                  json.dump(words, f)
+
+              print(f"Generated {len(words)} word timestamps")
+
+          asyncio.run(main())
+          EOF
+
+      - name: Build Subtitle Filters
+        run: |
+          python3 << 'EOF'
+          import json
+
+          with open("words.json") as f:
+              words = json.load(f)
+
+          groups = []
+          i = 0
+          while i < len(words):
+              group_words = words[i:i+3]
+              text = " ".join(w["word"] for w in group_words)
+              start = group_words[0]["start"]
+              end = group_words[-1]["start"] + group_words[-1]["duration"] + 0.1
+              groups.append({"text": text, "start": start, "end": end})
+              i += 3
+
+          filters = []
+          for g in groups:
+              text = g["text"]
+              text = text.replace("\\", "")
+              text = text.replace("'", "")
+              text = text.replace(":", "")
+              text = text.replace(",", "")
+              text = text.replace("[", "")
+              text = text.replace("]", "")
+              text = text.replace("(", "")
+              text = text.replace(")", "")
+
+              start = g["start"]
+              end = g["end"]
+
+              f_str = (
+                  f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+                  f"text='{text}':"
+                  f"x=(w-text_w)/2:"
+                  f"y=h-250:"
+                  f"fontsize=75:"
+                  f"fontcolor=yellow:"
+                  f"borderw=5:"
+                  f"bordercolor=black:"
+                  f"enable='between(t,{start:.3f},{end:.3f})'"
+              )
+              filters.append(f_str)
+
+          with open("subtitle_filters.txt", "w") as f:
+              f.write(",\n".join(filters))
+
+          print(f"Generated {len(groups)} subtitle groups")
+          EOF
+
+      - name: Download Videos from Pixabay
+        run: |
+          python3 << 'EOF'
+          import urllib.request
+          import json
+          import random
+          import os
+
+          api_key = os.environ.get('PIXABAY_API_KEY', '')
+
+          queries = [
+              "bucharest city",
+              "colorful street market",
+              "food cooking fire",
+              "crowd festival colorful",
+              "city lights colorful",
+              "street food",
+              "vibrant market",
+              "romania traditional",
+              "bucharest architecture",
+              "happy people city"
+          ]
+
+          random.shuffle(queries)
+
+          videos = []
+          for query in queries[:6]:
+              url = f"https://pixabay.com/api/videos/?key={api_key}&q={query.replace(' ', '+')}&per_page=10&min_duration=3"
+              try:
+                  with urllib.request.urlopen(url) as r:
+                      data = json.loads(r.read())
+                      hits = data.get("hits", [])
+                      if hits:
+                          pick = random.choice(hits)
+                          videos.append(pick)
+                          print(f"Found: {pick['tags'][:50]}")
+              except Exception as e:
+                  print(f"Error: {e}")
+
+          for i, video in enumerate(videos[:6]):
+              try:
+                  video_url = video["videos"]["medium"]["url"]
+                  urllib.request.urlretrieve(video_url, f"clip{i+1}.mp4")
+                  print(f"Downloaded clip{i+1}.mp4")
+              except Exception as e:
+                  print(f"Error: {e}")
+          EOF
+        env:
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+
+      - name: Get Voice Duration
+        run: |
+          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 voice.mp3)
+          DURATION_INT=$(echo "$DURATION" | cut -d'.' -f1)
+          TOTAL=$((DURATION_INT + 3))
+          if [ "$TOTAL" -lt 20 ]; then TOTAL=20; fi
+          if [ "$TOTAL" -gt 58 ]; then TOTAL=58; fi
+          echo "duration=$TOTAL" >> $GITHUB_ENV
+          echo "Video duration: $TOTAL seconds"
+
+      - name: Create Clips List
+        run: |
+          python3 << 'EOF'
+          import os
+          clips = sorted([f for f in os.listdir('.') if f.startswith('clip') and f.endswith('.mp4')])
+          with open('clips.txt', 'w') as f:
+              for clip in clips:
+                  f.write(f"file '{clip}'\n")
+          print(f"Clips: {clips}")
+          EOF
+
+      - name: Combine Background Videos
+        run: |
+          ffmpeg -hide_banner -loglevel error \
+          -f concat -safe 0 -i clips.txt \
+          -t ${{ env.duration }} \
+          -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=brightness=0.08:saturation=1.6:contrast=1.1,setsar=1" \
+          -c:v libx264 -preset veryfast -an \
+          combined_bg.mp4
+
+      - name: Create Final Short
+        run: |
+          SUBTITLE_FILTERS=$(cat subtitle_filters.txt)
+
+          ffmpeg -hide_banner -loglevel error \
+          -i combined_bg.mp4 \
+          -stream_loop -1 -i music1.mp3 \
+          -i voice.mp3 \
+          -filter_complex "\
+          [0:v]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.15:t=fill[darkened];\
+          [darkened]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:\
+          text='DID YOU KNOW':x=(w-text_w)/2:y=100:fontsize=65:fontcolor=white:\
+          borderw=4:bordercolor=black,\
+          ${SUBTITLE_FILTERS}[final];\
+          [1:a]volume=0.15[music];\
+          [2:a]volume=1.0[voice];\
+          [music][voice]amix=inputs=2:duration=first:weights=1 6[aout]" \
+          -map "[final]" -map "[aout]" \
+          -t ${{ env.duration }} \
+          -vcodec libx264 -preset veryfast -b:v 6000k -pix_fmt yuv420p \
+          -acodec aac -ab 192k -ar 44100 \
+          short_output.mp4
+
+      - name: Get YouTube Access Token
+        run: |
+          TOKEN_RESPONSE=$(curl -s -X POST https://oauth2.googleapis.com/token \
+            -d client_id=${{ secrets.YOUTUBE_CLIENT_ID }} \
+            -d client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }} \
+            -d refresh_token=${{ secrets.YOUTUBE_REFRESH_TOKEN }} \
+            -d grant_type=refresh_token)
+          ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token')
+          echo "access_token=$ACCESS_TOKEN" >> $GITHUB_ENV
+
+      - name: Upload Short to YouTube
+        run: |
+          TITLE="${{ env.title }}"
+          curl -s -X POST \
+          "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status" \
+          -H "Authorization: Bearer ${{ env.access_token }}" \
+          -F "metadata={\"snippet\":{\"title\":\"$TITLE\",\"description\":\"Amazing facts about Bucharest Romania! #Shorts #Bucharest #Romania #DidYouKnow #Facts #Travel #Europe\",\"tags\":[\"bucharest\",\"romania\",\"didyouknow\",\"shorts\",\"facts\",\"travel\",\"europe\",\"history\",\"culture\"],\"categoryId\":\"27\"},\"status\":{\"privacyStatus\":\"public\",\"selfDeclaredMadeForKids\":false}};type=application/json" \
+          -F "video=@short_output.mp4;type=video/mp4"
+
+      - name: Keep Repo Active
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git commit --allow-empty -m "shorts generated $(date)"
+          git push
