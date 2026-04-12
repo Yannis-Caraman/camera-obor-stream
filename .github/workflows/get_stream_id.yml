@@ -7,18 +7,16 @@ jobs:
     steps:
       - name: Get Stream ID
         run: |
-          ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
+          TOKEN_RESPONSE=$(curl -s -X POST https://oauth2.googleapis.com/token \
             -d client_id=${{ secrets.YOUTUBE_CLIENT_ID }} \
             -d client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }} \
             -d refresh_token=${{ secrets.YOUTUBE_REFRESH_TOKEN }} \
-            -d grant_type=refresh_token | jq -r '.access_token')
-
-          echo "ACCESS TOKEN OK"
+            -d grant_type=refresh_token)
+          
+          echo "TOKEN RESPONSE: $TOKEN_RESPONSE"
+          ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token')
+          echo "ACCESS TOKEN: $ACCESS_TOKEN"
 
           echo "=== LIVE STREAMS ==="
           curl -s "https://www.googleapis.com/youtube/v3/liveStreams?part=id,snippet,cdn&mine=true&maxResults=10" \
-            -H "Authorization: Bearer $ACCESS_TOKEN"
-
-          echo "=== LIVE BROADCASTS ==="
-          curl -s "https://www.googleapis.com/youtube/v3/liveBroadcasts?part=id,snippet,status&mine=true&maxResults=10" \
             -H "Authorization: Bearer $ACCESS_TOKEN"
