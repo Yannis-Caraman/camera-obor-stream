@@ -5,7 +5,7 @@ jobs:
   get-id:
     runs-on: ubuntu-latest
     steps:
-      - name: Get Access Token and Stream ID
+      - name: Get Stream ID
         run: |
           ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
             -d client_id=${{ secrets.YOUTUBE_CLIENT_ID }} \
@@ -15,5 +15,10 @@ jobs:
 
           echo "ACCESS TOKEN OK"
 
-          curl -s "https://www.googleapis.com/youtube/v3/liveStreams?part=id,snippet&mine=true" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.items[] | {id: .id, title: .snippet.title}'
+          echo "=== LIVE STREAMS ==="
+          curl -s "https://www.googleapis.com/youtube/v3/liveStreams?part=id,snippet,cdn&mine=true&maxResults=10" \
+            -H "Authorization: Bearer $ACCESS_TOKEN"
+
+          echo "=== LIVE BROADCASTS ==="
+          curl -s "https://www.googleapis.com/youtube/v3/liveBroadcasts?part=id,snippet,status&mine=true&maxResults=10" \
+            -H "Authorization: Bearer $ACCESS_TOKEN"
