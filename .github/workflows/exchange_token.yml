@@ -17,4 +17,3 @@ jobs:
           -d code=${{ github.event.inputs.auth_code }} \
           -d grant_type=authorization_code \
           -d redirect_uri=http://localhost
-          
