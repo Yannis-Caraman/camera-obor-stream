@@ -12,8 +12,9 @@ jobs:
       - name: Get Refresh Token
         run: |
           curl -X POST https://oauth2.googleapis.com/token \
-          -d client_id=${{ secrets.YOUTUBE_CLIENT_ID }} \
+          -d client_id=1027136883356-nl91lj9s047nu5l2snu8he6k1h23j7bq.apps.googleusercontent.com \
           -d client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }} \
           -d code=${{ github.event.inputs.auth_code }} \
           -d grant_type=authorization_code \
           -d redirect_uri=http://localhost
+          
