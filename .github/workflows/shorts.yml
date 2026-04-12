@@ -176,12 +176,14 @@ jobs:
           random.shuffle(queries)
 
           videos = []
+          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+
           for query in queries:
               if len(videos) >= 6:
                   break
               url = f"https://pixabay.com/api/videos/?key={api_key}&q={query.replace(' ', '+')}&per_page=10&min_duration=3"
               try:
-                  req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+                  req = urllib.request.Request(url, headers=headers)
                   with urllib.request.urlopen(req) as r:
                       data = json.loads(r.read())
                       hits = data.get("hits", [])
@@ -200,7 +202,9 @@ jobs:
           for i, video in enumerate(videos[:6]):
               try:
                   video_url = video["videos"]["medium"]["url"]
-                  urllib.request.urlretrieve(video_url, f"clip{i+1}.mp4")
+                  req = urllib.request.Request(video_url, headers=headers)
+                  with urllib.request.urlopen(req) as response, open(f"clip{i+1}.mp4", 'wb') as out_file:
+                      out_file.write(response.read())
                   print(f"Descărcat clip{i+1}.mp4")
                   downloaded += 1
               except Exception as e:
