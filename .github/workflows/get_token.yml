@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       auth_code:
-        description: '4/0Aci98E-v-qEZ0rAVVgvt46WRfbVuorRMzLltFxtgbupbPfFRxwlccwgfFvZAtk0dUfYDEA'
+        description: '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'
         required: true
 jobs:
   exchange:
