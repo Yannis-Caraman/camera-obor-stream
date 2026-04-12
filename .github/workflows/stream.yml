@@ -1,21 +1,17 @@
 name: Camera Obor FULL-HD PRO 24/7
-
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 21 * * *'   # 00:00 Romania
-    - cron: '0 3 * * *'    # 06:00 Romania
-    - cron: '0 9 * * *'    # 12:00 Romania
-    - cron: '0 15 * * *'   # 18:00 Romania
-
+    - cron: '0 6 * * *'
+    - cron: '0 12 * * *'
+    - cron: '0 18 * * *'
+    - cron: '0 0 * * *'
 concurrency:
   group: camera-stream
-  cancel-in-progress: false
-
+  cancel-in-progress: true
 jobs:
   run-stream:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -34,6 +30,53 @@ jobs:
           PERCENT_INT=$(echo "($SUBS * 100) / $TARGET" | bc)
           echo "$SUBS ($PERCENT_INT%)" > stats.txt
           echo "percent=$PERCENT" >> $GITHUB_OUTPUT
+
+      - name: Create YouTube Broadcast
+        id: broadcast
+        run: |
+          TOKEN_RESPONSE=$(curl -s -X POST https://oauth2.googleapis.com/token \
+            -d client_id=${{ secrets.YOUTUBE_CLIENT_ID }} \
+            -d client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }} \
+            -d refresh_token=${{ secrets.YOUTUBE_REFRESH_TOKEN }} \
+            -d grant_type=refresh_token)
+          ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token')
+          echo "access_token=$ACCESS_TOKEN" >> $GITHUB_ENV
+
+          START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          BROADCAST=$(curl -s -X POST \
+            "https://www.googleapis.com/youtube/v3/liveBroadcasts?part=id,snippet,contentDetails,status" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"snippet\": {
+                \"title\": \"🔴 LIVE Piata Obor Bucuresti 24/7\",
+                \"scheduledStartTime\": \"$START_TIME\",
+                \"description\": \"Live stream 24/7 din Piata Obor, Bucuresti. Camera live HD non-stop.\"
+              },
+              \"status\": {
+                \"privacyStatus\": \"public\",
+                \"selfDeclaredMadeForKids\": false
+              },
+              \"contentDetails\": {
+                \"enableAutoStart\": true,
+                \"enableAutoStop\": true,
+                \"latencyPreference\": \"normal\"
+              }
+            }")
+
+          echo "BROADCAST RESPONSE: $BROADCAST"
+          BROADCAST_ID=$(echo $BROADCAST | jq -r '.id')
+          echo "broadcast_id=$BROADCAST_ID" >> $GITHUB_ENV
+          echo "Broadcast ID: $BROADCAST_ID"
+
+      - name: Bind Broadcast to Stream
+        run: |
+          BIND=$(curl -s -X POST \
+            "https://www.googleapis.com/youtube/v3/liveBroadcasts/bind?id=${{ env.broadcast_id }}&part=id,contentDetails&streamId=${{ secrets.STREAM_ID }}" \
+            -H "Authorization: Bearer ${{ env.access_token }}" \
+            -H "Content-Type: application/json")
+          echo "BIND RESPONSE: $BIND"
 
       - name: Start Streaming (Live + ChromaKey MP4 Overlay + Music)
         run: |
@@ -54,6 +97,14 @@ jobs:
           -vcodec libx264 -preset veryfast -b:v 4500k -maxrate 4500k -bufsize 9000k -pix_fmt yuv420p -g 60 \
           -acodec aac -ab 128k -ar 44100 \
           -f flv "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}" || true
+
+      - name: Stop Broadcast
+        run: |
+          curl -s -X POST \
+          "https://www.googleapis.com/youtube/v3/liveBroadcasts/transition?broadcastStatus=complete&id=${{ env.broadcast_id }}&part=id,status" \
+          -H "Authorization: Bearer ${{ env.access_token }}" \
+          -H "Content-Type: application/json"
+          echo "Broadcast stopped!"
 
       - name: Wait 10 minutes
         run: sleep 600
