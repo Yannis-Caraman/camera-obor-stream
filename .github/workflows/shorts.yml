@@ -150,16 +150,18 @@ jobs:
           print(f"Generated {len(filters)} subtitle filters")
           EOF
 
-      - name: Download Videos from Pixabay
+      - name: Download and Prepare Videos
         run: |
           python3 << 'EOF'
           import urllib.request
           import json
           import random
           import os
+          import subprocess
           import sys
 
           api_key = os.environ.get('PIXABAY_API_KEY', '')
+          duration = int(os.environ.get('duration', 30))
 
           queries = [
               "bucharest city",
@@ -196,13 +198,67 @@ jobs:
               print("No videos found!")
               sys.exit(1)
 
+          # Download videos
+          downloaded = []
           for i, video in enumerate(videos[:6]):
               try:
                   video_url = video["videos"]["medium"]["url"]
-                  urllib.request.urlretrieve(video_url, f"clip{i+1}.mp4")
-                  print(f"Downloaded clip{i+1}.mp4")
+                  raw = f"raw_{i+1}.mp4"
+                  urllib.request.urlretrieve(video_url, raw)
+                  print(f"Downloaded {raw}")
+                  downloaded.append(raw)
               except Exception as e:
-                  print(f"Error: {e}")
+                  print(f"Download error: {e}")
+
+          if not downloaded:
+              print("No videos downloaded!")
+              sys.exit(1)
+
+          # Process clips
+          clip_duration = max(3, duration // len(downloaded) + 2)
+          trimmed = []
+
+          for i, raw in enumerate(downloaded):
+              output = f"clip_{i+1}.mp4"
+              result = subprocess.run(
+                  ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                   '-of', 'default=noprint_wrappers=1:nokey=1', raw],
+                  capture_output=True, text=True)
+              try:
+                  orig_dur = float(result.stdout.strip())
+              except:
+                  orig_dur = 10
+
+              max_start = max(0, orig_dur - clip_duration - 0.5)
+              start_time = random.uniform(0, max_start) if max_start > 0 else 0
+
+              cmd = [
+                  'ffmpeg', '-hide_banner', '-loglevel', 'error',
+                  '-ss', str(start_time),
+                  '-i', raw,
+                  '-t', str(clip_duration),
+                  '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=brightness=0.06:saturation=1.5:contrast=1.08,setsar=1',
+                  '-c:v', 'libx264', '-preset', 'veryfast', '-an', '-y', output
+              ]
+              result = subprocess.run(cmd)
+              if result.returncode == 0:
+                  trimmed.append(output)
+                  print(f"Processed {raw} -> {output}")
+              else:
+                  print(f"Failed to process {raw}")
+
+          if not trimmed:
+              print("No clips processed!")
+              sys.exit(1)
+
+          with open('clips.txt', 'w') as f:
+              for clip in trimmed:
+                  f.write(f"file '{clip}'\n")
+
+          print(f"Ready: {len(trimmed)} clips")
+          print("clips.txt content:")
+          with open('clips.txt') as f:
+              print(f.read())
           EOF
         env:
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
@@ -217,52 +273,6 @@ jobs:
           echo "duration=$TOTAL" >> $GITHUB_ENV
           echo "Video duration: $TOTAL seconds"
 
-      - name: Prepare Clips
-        run: |
-          python3 << 'EOF'
-          import os
-          import subprocess
-          import random
-          import sys
-
-          clips = sorted([f for f in os.listdir('.') if f.startswith('clip') and f.endswith('.mp4')])
-          if not clips:
-              print("No clips!")
-              sys.exit(1)
-
-          duration = int(os.environ.get('duration', 30))
-          clip_duration = max(3, duration // len(clips) + 1)
-
-          trimmed = []
-          for i, clip in enumerate(clips):
-              output = f"trimmed_{i+1}.mp4"
-              result = subprocess.run(
-                  ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-                   '-of', 'default=noprint_wrappers=1:nokey=1', clip],
-                  capture_output=True, text=True)
-              try:
-                  orig_dur = float(result.stdout.strip())
-              except:
-                  orig_dur = 10
-              max_start = max(0, orig_dur - clip_duration - 0.5)
-              start_time = random.uniform(0, max_start) if max_start > 0 else 0
-              cmd = [
-                  'ffmpeg', '-hide_banner', '-loglevel', 'error',
-                  '-ss', str(start_time), '-i', clip,
-                  '-t', str(clip_duration),
-                  '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=brightness=0.06:saturation=1.5:contrast=1.08,setsar=1',
-                  '-c:v', 'libx264', '-preset', 'veryfast', '-an', '-y', output
-              ]
-              subprocess.run(cmd, check=True)
-              trimmed.append(output)
-              print(f"Trimmed {clip} -> {output}")
-
-          with open('clips.txt', 'w') as f:
-              for clip in trimmed:
-                  f.write(f"file '{clip}'\n")
-          print(f"Ready: {len(trimmed)} clips")
-          EOF
-
       - name: Combine Background Videos
         run: |
           ffmpeg -hide_banner -loglevel error \
@@ -270,6 +280,7 @@ jobs:
           -t ${{ env.duration }} \
           -c:v libx264 -preset veryfast -an \
           -y combined_bg.mp4
+          echo "Combined video OK"
 
       - name: Create Final Short
         run: |
@@ -296,6 +307,7 @@ jobs:
           -c:v libx264 -preset veryfast -b:v 6000k -pix_fmt yuv420p \
           -c:a aac -b:a 192k -ar 44100 \
           -y short_output.mp4
+          echo "Final short OK"
 
       - name: Get YouTube Access Token
         run: |
