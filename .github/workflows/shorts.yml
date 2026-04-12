@@ -33,8 +33,8 @@ jobs:
             VOICE="en-US-JennyNeural"
             TITLE="Did you know? Bucharest Facts #Shorts"
           else
-            echo "Genereaza un fapt unic surprinzator despre Bucuresti Romania. Subiect diferit de fiecare data: istorie arhitectura mancare cultura oameni locuri evenimente. Intre 40 si 50 de cuvinte. Incepe cu Stiai ca. Diacritice corecte. Returneaza DOAR faptul." > prompt.txt
-            VOICE="ro-RO-AlinaNeural"
+            echo "Genereaza un fapt unic surprinzator despre Bucuresti Romania. Subiect diferit de fiecare data: istorie arhitectura mancare cultura oameni locuri evenimente. Intre 40 si 50 de cuvinte. Incepe cu Stiai ca. Foloseste diacritice corecte: ă â î ș ț. Returneaza DOAR faptul." > prompt.txt
+            VOICE="ro-RO-EmilNeural"
             TITLE="Stiai ca? Fapte despre Bucuresti #Shorts"
           fi
 
@@ -59,6 +59,65 @@ jobs:
           echo "title=$TITLE" >> $GITHUB_ENV
           echo "lang=$LANG" >> $GITHUB_ENV
 
+      - name: Fix Diacritics and Prepare TTS Text
+        run: |
+          python3 << 'EOF'
+          import os
+          import re
+
+          fact = os.environ.get('fact', '')
+          lang = os.environ.get('lang', 'en')
+
+          ro_pronunciation = {
+              "Cismigiu": "Cișmigiu",
+              "Cișmigiu": "Cișmigiu",
+              "Herastrau": "Herăstrău",
+              "Herăstrău": "Herăstrău",
+              "Floreasca": "Floreasca",
+              "Unirii": "Unirii",
+              "Victoriei": "Victoriei",
+              "Dorobanti": "Dorobanți",
+              "Dorobanți": "Dorobanți",
+              "Cotroceni": "Cotroceni",
+              "Baneasa": "Băneasa",
+              "Băneasa": "Băneasa",
+              "Dudesti": "Dudești",
+              "Dudești": "Dudești",
+              "Militari": "Militari",
+              "Ghencea": "Ghencea",
+              "Titan": "Titan",
+              "Rahova": "Rahova",
+              "Ferentari": "Ferentari",
+              "Obor": "Obor",
+              "Colentina": "Colentina",
+              "Pantelimon": "Pantelimon",
+              "Calea Victoriei": "Calea Victoriei",
+              "Atheneum": "Atheneu",
+              "Athenaeum": "Atheneu",
+              "Palatul Parlamentului": "Palatul Parlamentului",
+              "Casa Poporului": "Casa Poporului",
+              "Arcul de Triumf": "Arcul de Triumf",
+              "Piata Unirii": "Piața Unirii",
+              "Piata Victoriei": "Piața Victoriei",
+          }
+
+          if lang == 'ro':
+              replacements = {
+                  '\u015f': 'ș', '\u015e': 'Ș',
+                  '\u0163': 'ț', '\u0162': 'Ț',
+              }
+              for wrong, correct in replacements.items():
+                  fact = fact.replace(wrong, correct)
+
+          for wrong, correct in ro_pronunciation.items():
+              fact = fact.replace(wrong, correct)
+
+          with open('tts_text.txt', 'w', encoding='utf-8') as f:
+              f.write(fact)
+
+          print(f"TTS text: {fact}")
+          EOF
+
       - name: Generate Voiceover with Word Timestamps
         run: |
           python3 << 'EOF'
@@ -67,7 +126,9 @@ jobs:
           import os
           import json
 
-          fact = os.environ.get('fact', '')
+          with open('tts_text.txt', 'r', encoding='utf-8') as f:
+              fact = f.read().strip()
+
           voice = os.environ.get('voice', 'en-US-JennyNeural')
 
           async def main():
@@ -89,8 +150,8 @@ jobs:
                   for chunk in audio_chunks:
                       f.write(chunk)
 
-              with open("words.json", "w") as f:
-                  json.dump(words, f)
+              with open("words.json", "w", encoding='utf-8') as f:
+                  json.dump(words, f, ensure_ascii=False)
 
               print(f"Generated {len(words)} word timestamps")
 
@@ -103,7 +164,7 @@ jobs:
           import json
           import re
 
-          with open("words.json") as f:
+          with open("words.json", encoding='utf-8') as f:
               words = json.load(f)
 
           if not words:
@@ -111,43 +172,45 @@ jobs:
                   f.write("")
               exit(0)
 
-          groups = []
+          font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+          filters = []
+
+          # Grup de 3 cuvinte, pop-up sincronizat cu primul cuvant din grup
           i = 0
           while i < len(words):
-              group_words = words[i:i+3]
-              text = " ".join(w["word"] for w in group_words)
-              start = group_words[0]["start"]
-              end = group_words[-1]["start"] + group_words[-1]["duration"] + 0.15
-              groups.append({"text": text, "start": start, "end": end})
-              i += 3
+              group = words[i:i+3]
 
-          filters = []
-          for g in groups:
-              text = g["text"]
+              text = " ".join(w["word"] for w in group).upper()
+              # Curata caractere care sparg ffmpeg drawtext
               text = re.sub(r"[\\'\";:\[\](){}]", "", text)
               text = re.sub(r',', '', text)
               text = re.sub(r'\s+', ' ', text).strip()
+
               if not text:
+                  i += 3
                   continue
-              start = g["start"]
-              end = g["end"]
+
+              start = group[0]["start"]
+              end = group[-1]["start"] + group[-1]["duration"] + 0.1
+
               f_str = (
-                  f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+                  f"drawtext=fontfile={font}:"
                   f"text='{text}':"
                   f"x=(w-text_w)/2:"
-                  f"y=h-250:"
-                  f"fontsize=70:"
+                  f"y=h-200:"
+                  f"fontsize=80:"
                   f"fontcolor=yellow:"
-                  f"borderw=4:"
+                  f"borderw=5:"
                   f"bordercolor=black:"
                   f"enable='between(t\\,{start:.3f}\\,{end:.3f})'"
               )
               filters.append(f_str)
+              i += 3
 
-          with open("subtitle_filters.txt", "w") as f:
+          with open("subtitle_filters.txt", "w", encoding='utf-8') as f:
               f.write(",".join(filters))
 
-          print(f"Generated {len(filters)} subtitle filters")
+          print(f"Generated {len(filters)} subtitle groups (3 words each)")
           EOF
 
       - name: Download and Prepare Videos
@@ -262,9 +325,6 @@ jobs:
                   f.write(f"file '{clip}'\n")
 
           print(f"Ready: {len(trimmed)} clips")
-          print("clips.txt content:")
-          with open('clips.txt') as f:
-              print(f.read())
           EOF
         env:
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
