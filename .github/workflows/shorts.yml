@@ -40,7 +40,7 @@ jobs:
           else
             cat > prompt.txt << 'ENDOFPROMPT'
           Genereaza un fapt unic surprinzator despre Bucuresti Romania. Alege un subiect diferit cum ar fi istorie arhitectura mancare cultura oameni locuri evenimente. Intre 40 si 50 de cuvinte. Incepe cu Stiai ca. Foloseste diacritice corecte: ă â î ș ț. Returneaza DOAR faptul nimic altceva.
-          ENDOFPROMPT
+          ENDOFPROMPT ^
             VOICE="ro-RO-AlinaNeural"
             TITLE="Stiai ca? Fapte despre Bucuresti #Shorts"
             DESCRIPTION="Fapte uimitoare despre Bucuresti Romania! Da like si aboneaza-te pentru fapte zilnice!
