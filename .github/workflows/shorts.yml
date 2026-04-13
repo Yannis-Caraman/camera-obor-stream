@@ -198,7 +198,6 @@ jobs:
                   i += 3
                   continue
 
-              # Fontsize dinamic in functie de lungimea textului
               char_count = len(text)
               if char_count <= 12:
                   fontsize = 90
@@ -234,6 +233,16 @@ jobs:
               print(f"First filter preview: {filters[0][:100]}...")
           EOF
 
+      - name: Get Voice Duration
+        run: |
+          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 voice.mp3)
+          DURATION_INT=$(echo "$DURATION" | cut -d'.' -f1)
+          TOTAL=$((DURATION_INT + 3))
+          if [ "$TOTAL" -lt 20 ]; then TOTAL=20; fi
+          if [ "$TOTAL" -gt 58 ]; then TOTAL=58; fi
+          echo "duration=$TOTAL" >> $GITHUB_ENV
+          echo "Video duration: $TOTAL seconds"
+
       - name: Download and Prepare Videos
         run: |
           python3 - << 'EOF'
@@ -246,6 +255,9 @@ jobs:
 
           api_key = os.environ.get('PIXABAY_API_KEY', '')
           duration = int(os.environ.get('duration', 30))
+
+          clip_duration = max(4, duration // 6 + 1)
+          print(f"Total duration: {duration}s, clip duration: {clip_duration}s per clip")
 
           headers = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -305,9 +317,7 @@ jobs:
               print("No videos downloaded!")
               sys.exit(1)
 
-          clip_duration = max(3, duration // len(downloaded) + 2)
           trimmed = []
-
           for i, raw in enumerate(downloaded):
               output = f"clip_{i+1}.mp4"
               result = subprocess.run(
@@ -333,7 +343,7 @@ jobs:
               result = subprocess.run(cmd)
               if result.returncode == 0:
                   trimmed.append(output)
-                  print(f"Processed {raw} -> {output}")
+                  print(f"Processed {raw} -> {output} ({clip_duration}s)")
               else:
                   print(f"Failed to process {raw}")
 
@@ -345,20 +355,10 @@ jobs:
               for clip in trimmed:
                   f.write(f"file '{clip}'\n")
 
-          print(f"Ready: {len(trimmed)} clips")
+          print(f"Ready: {len(trimmed)} clips x {clip_duration}s = {len(trimmed)*clip_duration}s total")
           EOF
         env:
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-
-      - name: Get Voice Duration
-        run: |
-          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 voice.mp3)
-          DURATION_INT=$(echo "$DURATION" | cut -d'.' -f1)
-          TOTAL=$((DURATION_INT + 3))
-          if [ "$TOTAL" -lt 20 ]; then TOTAL=20; fi
-          if [ "$TOTAL" -gt 58 ]; then TOTAL=58; fi
-          echo "duration=$TOTAL" >> $GITHUB_ENV
-          echo "Video duration: $TOTAL seconds"
 
       - name: Combine Background Videos
         run: |
