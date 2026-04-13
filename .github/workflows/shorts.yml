@@ -138,7 +138,6 @@ jobs:
 
           print(f"Whisper found {len(words)} words")
 
-          # Fallback daca Whisper nu gaseste cuvinte
           if not words:
               print("Whisper fallback - using estimated timestamps")
               import subprocess as sp
@@ -199,6 +198,17 @@ jobs:
                   i += 3
                   continue
 
+              # Fontsize dinamic in functie de lungimea textului
+              char_count = len(text)
+              if char_count <= 12:
+                  fontsize = 90
+              elif char_count <= 20:
+                  fontsize = 75
+              elif char_count <= 28:
+                  fontsize = 62
+              else:
+                  fontsize = 52
+
               start = group[0]["start"]
               end = group[-1]["start"] + group[-1]["duration"] + 0.1
 
@@ -206,8 +216,8 @@ jobs:
                   f"drawtext=fontfile={font}:"
                   f"text='{text}':"
                   f"x=(w-text_w)/2:"
-                  f"y=h-200:"
-                  f"fontsize=80:"
+                  f"y=(h-text_h)/2:"
+                  f"fontsize={fontsize}:"
                   f"fontcolor=yellow:"
                   f"borderw=5:"
                   f"bordercolor=black:"
