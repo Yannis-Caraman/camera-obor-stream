@@ -21,7 +21,7 @@ jobs:
       - name: Install Tools
         run: |
           sudo apt update && sudo apt install -y ffmpeg fonts-dejavu bc jq curl python3-pip
-          pip3 install edge-tts requests --break-system-packages
+          pip3 install "edge-tts==6.1.9" requests --break-system-packages
 
       - name: Generate Fact with Gemini
         run: |
@@ -89,13 +89,14 @@ jobs:
 
           print(f"Generating TTS for: {fact}")
           print(f"Voice: {voice}")
+          print(f"edge-tts version: {edge_tts.__version__}")
 
           async def main():
-              tts = edge_tts.Communicate(fact, voice)
+              communicate = edge_tts.Communicate(fact, voice)
               words = []
               audio_chunks = []
 
-              async for chunk in tts.stream():
+              async for chunk in communicate.stream():
                   if chunk["type"] == "audio":
                       audio_chunks.append(chunk["data"])
                   elif chunk["type"] == "WordBoundary":
@@ -120,8 +121,40 @@ jobs:
               if words:
                   print(f"First word: {words[0]}")
                   print(f"Last word: {words[-1]}")
+              else:
+                  print("WARNING: Still 0 words - using fallback")
 
           asyncio.run(main())
+
+          # Fallback: daca words.json e gol, genereaza timestamps estimati din audio
+          with open("words.json", "r") as f:
+              words = json.load(f)
+
+          if not words:
+              print("Using duration-based fallback timestamps...")
+              import subprocess
+
+              result = subprocess.run(
+                  ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                   '-of', 'default=noprint_wrappers=1:nokey=1', 'voice.mp3'],
+                  capture_output=True, text=True)
+              total_dur = float(result.stdout.strip())
+
+              text_words = fact.split()
+              dur_per_word = total_dur / len(text_words)
+
+              words = []
+              for i, w in enumerate(text_words):
+                  words.append({
+                      "word": w,
+                      "start": round(i * dur_per_word, 3),
+                      "duration": round(dur_per_word * 0.85, 3)
+                  })
+
+              with open("words.json", "w", encoding='utf-8') as f:
+                  json.dump(words, f, ensure_ascii=False)
+
+              print(f"Fallback generated {len(words)} estimated word timestamps")
           EOF
 
       - name: Build Subtitle Filters
