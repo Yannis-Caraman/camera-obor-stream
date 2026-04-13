@@ -1,5 +1,5 @@
 - name: Create Final Short
-        run: |
+ run: |
           python3 << 'EOF'
           import os
           import subprocess
