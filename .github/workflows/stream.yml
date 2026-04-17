@@ -40,7 +40,6 @@ jobs:
           PERCENT=$(echo "scale=4; $PERCENT_INT / 100" | bc)
           echo "subs=$SUBS" >> $GITHUB_OUTPUT
           echo "percent=$PERCENT" >> $GITHUB_OUTPUT
-          echo "percent_int=$PERCENT_INT" >> $GITHUB_OUTPUT
 
       - name: Start Streaming (5h50min)
         env:
@@ -49,20 +48,11 @@ jobs:
           RTSP_URL: ${{ secrets.RTSP_URL }}
           YOUTUBE_KEY: ${{ secrets.YOUTUBE_KEY }}
         run: |
-          # Calculeaza latimea barei de progres (din 1920px)
           BAR_WIDTH=$(echo "scale=0; 1920 * $PERCENT / 1" | bc)
           if [ -z "$BAR_WIDTH" ] || [ "$BAR_WIDTH" -lt 1 ]; then BAR_WIDTH=1; fi
 
-          cat > /tmp/filter.txt << FILTEREOF
-[0:v]scale=1920:1080,setsar=1[cam];
-[1:v]scale=1920:1080,setsar=1[overlay_raw];
-[overlay_raw]chromakey=color=green:similarity=0.3:blend=0.05[overlay_keyed];
-[cam][overlay_keyed]overlay=0:0[with_overlay];
-[with_overlay]drawbox=x=0:y=1055:w=1920:h=25:color=black@0.75:t=fill,
-drawbox=x=0:y=1055:w=${BAR_WIDTH}:h=25:color=red@0.9:t=fill,
-drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${SUBS} / 1000 abonati':x=10:y=1060:fontsize=18:fontcolor=white:shadowcolor=black:shadowx=1:shadowy=1[final];
-[2:a]volume=0.35[aout]
-FILTEREOF
+          # Generam filtrul curat pentru a evita erorile de spatiere in YAML
+          echo "[0:v]scale=1920:1080,setsar=1[cam]; [1:v]scale=1920:1080,setsar=1[overlay_raw]; [overlay_raw]chromakey=color=green:similarity=0.3:blend=0.05[overlay_keyed]; [cam][overlay_keyed]overlay=0:0[with_overlay]; [with_overlay]drawbox=x=0:y=1055:w=1920:h=25:color=black@0.75:t=fill, drawbox=x=0:y=1055:w=${BAR_WIDTH}:h=25:color=red@0.9:t=fill, drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${SUBS} / 1000 abonati':x=10:y=1060:fontsize=18:fontcolor=white:shadowcolor=black:shadowx=1:shadowy=1[final]; [2:a]volume=0.35[aout]" > /tmp/filter.txt
 
           timeout 21000 ffmpeg \
             -hide_banner -loglevel warning -rtsp_transport tcp \
