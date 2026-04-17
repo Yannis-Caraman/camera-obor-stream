@@ -25,54 +25,72 @@ jobs:
       - name: Get Real Subs and Calculate Bar
         id: subs
         run: |
-          RESPONSE=$(curl -s 'https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${{ secrets.CHANNEL_ID }}&key=${{ secrets.YOUTUBE_API_KEY }}')
-          SUBS=$(echo $RESPONSE | jq -r '.items[0].statistics.subscriberCount')
+          RESPONSE=$(curl -s "https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${{ secrets.CHANNEL_ID }}&key=${{ secrets.YOUTUBE_API_KEY }}")
+          SUBS=$(echo "$RESPONSE" | jq -r '.items[0].statistics.subscriberCount // "0"')
           TARGET=1000
-          PERCENT=$(echo 'scale=2; $SUBS / $TARGET' | bc)
-          if (( $(echo '$PERCENT > 1.0' | bc -l) )); then PERCENT=1.0; fi
-          PERCENT_INT=$(echo '($SUBS * 100) / $TARGET' | bc)
-          echo '$SUBS ($PERCENT_INT%)' > stats.txt
-          echo 'percent=$PERCENT' >> $GITHUB_OUTPUT
+          PERCENT_INT=$(( (SUBS * 100) / TARGET ))
+          if [ "$PERCENT_INT" -gt 100 ]; then PERCENT_INT=100; fi
+          PERCENT=$(echo "scale=4; $PERCENT_INT / 100" | bc)
+          BAR_WIDTH=$(echo "scale=0; 1920 * $PERCENT / 1" | bc)
+          if [ -z "$BAR_WIDTH" ] || [ "$BAR_WIDTH" -lt 1 ]; then BAR_WIDTH=1; fi
+          echo "subs=$SUBS" >> $GITHUB_OUTPUT
+          echo "bar_width=$BAR_WIDTH" >> $GITHUB_OUTPUT
 
       - name: Create YouTube Broadcast
         id: broadcast
         run: |
           TOKEN_RESPONSE=$(curl -s -X POST https://oauth2.googleapis.com/token \
-            -d client_id=${{ secrets.YOUTUBE_CLIENT_ID }} \
-            -d client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }} \
-            -d refresh_token=${{ secrets.YOUTUBE_REFRESH_TOKEN }} \
-            -d grant_type=refresh_token)
-          ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token')
-          echo 'access_token=$ACCESS_TOKEN' >> $GITHUB_ENV
+            -d "client_id=${{ secrets.YOUTUBE_CLIENT_ID }}" \
+            -d "client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }}" \
+            -d "refresh_token=${{ secrets.YOUTUBE_REFRESH_TOKEN }}" \
+            -d "grant_type=refresh_token")
+          
+          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+          
+          # CORECTAT: Ghilimele duble pentru a evalua corect variabila!
+          echo "access_token=$ACCESS_TOKEN" >> $GITHUB_ENV
+          
           START_TIME=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          
+          # CORECTAT: Payload de JSON complet pentru API-ul YouTube
           BROADCAST=$(curl -s -X POST \
-            'https://www.googleapis.com/youtube/v3/liveBroadcasts?part=id,snippet,contentDetails,status' \
+            "https://www.googleapis.com/youtube/v3/liveBroadcasts?part=id,snippet,contentDetails,status" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H 'Content-Type: application/json' \
-            -d '{snippet:{title:LIVE Piata Obor...},status:{...},contentDetails:{enableAutoStart:true,enableAutoStop:true}}')
-          BROADCAST_ID=$(echo $BROADCAST | jq -r '.id')
-          echo 'broadcast_id=$BROADCAST_ID' >> $GITHUB_ENV
+            -H "Content-Type: application/json" \
+            -d '{"snippet":{"title":"LIVE Piata Obor Bucuresti 24/7","scheduledStartTime":"'"$START_TIME"'"},"status":{"privacyStatus":"public"},"contentDetails":{"enableAutoStart":true,"enableAutoStop":true}}')
+          
+          BROADCAST_ID=$(echo "$BROADCAST" | jq -r '.id')
+          echo "broadcast_id=$BROADCAST_ID" >> $GITHUB_ENV
 
       - name: Bind Broadcast to Stream
         run: |
           curl -s -X POST \
-          'https://www.googleapis.com/youtube/v3/liveBroadcasts/bind?id=${{ env.broadcast_id }}&part=id,contentDetails&streamId=${{ secrets.STREAM_ID }}' \
+          "https://www.googleapis.com/youtube/v3/liveBroadcasts/bind?id=${{ env.broadcast_id }}&part=id,contentDetails&streamId=${{ secrets.STREAM_ID }}" \
           -H "Authorization: Bearer ${{ env.access_token }}"
 
       - name: Start Streaming (Live + ChromaKey + Music)
+        env:
+          SUBS: ${{ steps.subs.outputs.subs }}
+          BAR_WIDTH: ${{ steps.subs.outputs.bar_width }}
         run: |
+          # CORECTAT: Am readus filtrul complet pentru progres si chroma key, fara prescurtarea "..."
+          echo "[0:v]scale=1920:1080,setsar=1[cam]; [1:v]scale=1920:1080,setsar=1[overlay_raw]; [overlay_raw]chromakey=color=green:similarity=0.3:blend=0.05[overlay_keyed]; [cam][overlay_keyed]overlay=0:0[with_overlay]; [with_overlay]drawbox=x=0:y=1055:w=1920:h=25:color=black@0.75:t=fill, drawbox=x=0:y=1055:w=${BAR_WIDTH}:h=25:color=red@0.9:t=fill, drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${SUBS} / 1000 abonati':x=10:y=1060:fontsize=18:fontcolor=white:shadowcolor=black:shadowx=1:shadowy=1[final]; [2:a]volume=0.35[aout]" > /tmp/filter.txt
+
           timeout 21000 ffmpeg -hide_banner -loglevel error \
-          -rtsp_transport tcp -i '${{ secrets.RTSP_URL }}' \
-          -stream_loop -1 -i 'video.mp4' \
-          -stream_loop -1 -f concat -safe 0 -i 'playlist.txt' \
-          -filter_complex '[0:v]scale=1920:1080...[final]; [2:a]volume=0.35[aout]' \
-          -map '[final]' -map '[aout]' \
-          -f flv 'rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}' || true
+          -rtsp_transport tcp -i "${{ secrets.RTSP_URL }}" \
+          -stream_loop -1 -i "video.mp4" \
+          -stream_loop -1 -f concat -safe 0 -i "playlist.txt" \
+          -filter_complex_script /tmp/filter.txt \
+          -map "[final]" -map "[aout]" \
+          -c:v libx264 -preset veryfast -tune zerolatency -b:v 4500k \
+          -maxrate 4500k -bufsize 9000k -g 60 \
+          -c:a aac -b:a 128k -ar 44100 -f flv \
+          "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}" || true
 
       - name: Stop Broadcast
         run: |
           curl -s -X POST \
-          'https://www.googleapis.com/youtube/v3/liveBroadcasts/transition?broadcastStatus=complete&id=${{ env.broadcast_id }}&part=id,status' \
+          "https://www.googleapis.com/youtube/v3/liveBroadcasts/transition?broadcastStatus=complete&id=${{ env.broadcast_id }}&part=id,status" \
           -H "Authorization: Bearer ${{ env.access_token }}"
 
       - name: Wait 10 minutes
