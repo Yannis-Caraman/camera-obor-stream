@@ -1,460 +1,115 @@
-name: Auto Shorts Bucharest
+name: Camera Obor FULL-HD PRO 24/7
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 8 * * *'
-    - cron: '0 14 * * *'
-    - cron: '0 20 * * *'
+    - cron: '0 6 * * *'
+    - cron: '0 12 * * *'
+    - cron: '0 18 * * *'
+    - cron: '0 0 * * *'
+
+concurrency:
+  group: camera-stream
+  cancel-in-progress: true
+
 jobs:
-  create-short:
+  run-stream:
     runs-on: ubuntu-latest
+    timeout-minutes: 375
+
     steps:
+
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Cache apt packages
-        uses: actions/cache@v4
-        with:
-          path: /var/cache/apt/archives
-          key: apt-ffmpeg-${{ runner.os }}
-
       - name: Install Tools
         run: |
-          sudo apt update && sudo apt install -y ffmpeg fonts-dejavu bc jq curl python3-pip
-          pip3 install gtts requests openai-whisper --break-system-packages
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg bc jq curl
 
-      - name: Generate Fact with Gemini
+      # ---------------------------------------------------------------
+      # Citeste abonati si calculeaza procentul pentru bara
+      # ---------------------------------------------------------------
+      - name: Get Real Subs and Calculate Bar
+        id: subs
         run: |
-          HOUR=$(date +%H)
-          if [ "$HOUR" = "08" ]; then LANG="en"; elif [ "$HOUR" = "14" ]; then LANG="ro"; else LANG="en"; fi
+          RESPONSE=$(curl -s "https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${{ secrets.CHANNEL_ID }}&key=${{ secrets.YOUTUBE_API_KEY }}")
+          SUBS=$(echo "$RESPONSE" | jq -r '.items[0].statistics.subscriberCount // "0"')
+          TARGET=1000
+          PERCENT_INT=$(( (SUBS * 100) / TARGET ))
+          if [ "$PERCENT_INT" -gt 100 ]; then PERCENT_INT=100; fi
+          PERCENT=$(echo "scale=4; $PERCENT_INT / 100" | bc)
+          echo "Abonati: $SUBS / $TARGET ($PERCENT_INT%)"
+          echo "subs=$SUBS"        >> $GITHUB_OUTPUT
+          echo "percent=$PERCENT"  >> $GITHUB_OUTPUT
+          echo "percent_int=$PERCENT_INT" >> $GITHUB_OUTPUT
 
-          echo "lang=$LANG" >> $GITHUB_ENV
-
-          if [ "$LANG" = "en" ]; then
-            echo "title=Did you know? Bucharest Facts #Shorts" >> $GITHUB_ENV
-            printf '%s' "Generate a unique surprising Did you know fact about Bucharest Romania. Pick a different topic each time: history architecture food culture people famous places events legends. Between 40 and 50 words. Start with Did you know that. Return ONLY the fact no quotes no asterisks no apostrophes use full words instead." > prompt.txt
-          else
-            echo "title=Stiai ca? Fapte despre Bucuresti #Shorts" >> $GITHUB_ENV
-            printf '%s' "Genereaza un fapt unic surprinzator despre Bucuresti Romania. Subiect diferit de fiecare data: istorie arhitectura mancare cultura oameni locuri evenimente. Intre 40 si 50 de cuvinte. Incepe cu Stiai ca. Foloseste diacritice corecte. Nu folosi apostrofuri. Returneaza DOAR faptul." > prompt.txt
-          fi
-
-          PROMPT=$(cat prompt.txt | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" | tr -d '"')
-
-          curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"contents\":[{\"parts\":[{\"text\":\"$PROMPT\"}]}]}" \
-            > gemini_response.json
-
-          cat gemini_response.json
-
-          python3 - << 'PYEOF'
-          import json, re
-
-          with open('gemini_response.json', 'r') as f:
-              data = json.load(f)
-
-          fact = data['candidates'][0]['content']['parts'][0]['text']
-          fact = fact.strip().replace('\n', ' ')
-          fact = re.sub(r'\s+', ' ', fact)
-          fact = re.sub(r'[`*]', '', fact)
-          fact = fact.replace("\u2019s ", " is ").replace("'s ", " is ")
-          fact = fact.replace("\u2019t ", " not ").replace("'t ", " not ")
-          fact = fact.replace("\u2019", "").replace("'", "")
-          fact = fact[:300]
-
-          if not fact or fact == 'null':
-              print("Gemini failed!")
-              exit(1)
-
-          with open('tts_text.txt', 'w', encoding='utf-8') as f:
-              f.write(fact)
-
-          print(f"Saved fact: {fact}")
-          PYEOF
-
-      - name: Generate Voiceover with gTTS
-        run: |
-          python3 - << 'EOF'
-          import os
-          import json
-          import subprocess
-          from gtts import gTTS
-
-          with open('tts_text.txt', 'r', encoding='utf-8') as f:
-              fact = f.read().strip()
-
-          lang_env = os.environ.get('lang', 'en')
-          gtts_lang = 'ro' if lang_env == 'ro' else 'en'
-
-          print(f"Generating TTS for: {fact}")
-          print(f"Language: {gtts_lang}")
-
-          tts = gTTS(text=fact, lang=gtts_lang, slow=False)
-          tts.save("voice.mp3")
-          print("Audio generated OK")
-
-          result = subprocess.run(
-              ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-               '-of', 'default=noprint_wrappers=1:nokey=1', 'voice.mp3'],
-              capture_output=True, text=True)
-          total_dur = float(result.stdout.strip())
-          print(f"Audio duration: {total_dur}s")
-          EOF
-
-      - name: Align Words with Whisper
-        run: |
-          python3 - << 'EOF'
-          import whisper
-          import json
-          import os
-
-          with open('tts_text.txt', 'r', encoding='utf-8') as f:
-              fact = f.read().strip()
-
-          lang_env = os.environ.get('lang', 'en')
-          whisper_lang = 'ro' if lang_env == 'ro' else 'en'
-
-          print(f"Loading Whisper model...")
-          model = whisper.load_model("tiny")
-
-          print(f"Transcribing with word timestamps...")
-          result = model.transcribe(
-              "voice.mp3",
-              language=whisper_lang,
-              word_timestamps=True,
-              verbose=False
-          )
-
-          words = []
-          for segment in result.get("segments", []):
-              for w in segment.get("words", []):
-                  word_text = w.get("word", "").strip()
-                  if word_text:
-                      words.append({
-                          "word": word_text,
-                          "start": round(w["start"], 3),
-                          "duration": round(w["end"] - w["start"], 3)
-                      })
-
-          print(f"Whisper found {len(words)} words")
-
-          if not words:
-              print("Whisper fallback - using estimated timestamps")
-              import subprocess as sp
-              result2 = sp.run(
-                  ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-                   '-of', 'default=noprint_wrappers=1:nokey=1', 'voice.mp3'],
-                  capture_output=True, text=True)
-              total_dur = float(result2.stdout.strip())
-              text_words = fact.split()
-              dur_per_word = total_dur / len(text_words)
-              for i, w in enumerate(text_words):
-                  words.append({
-                      "word": w,
-                      "start": round(i * dur_per_word, 3),
-                      "duration": round(dur_per_word * 0.85, 3)
-                  })
-              print(f"Fallback generated {len(words)} estimated timestamps")
-
-          with open("words.json", "w", encoding='utf-8') as f:
-              json.dump(words, f, ensure_ascii=False)
-
-          if words:
-              print(f"First word: {words[0]}")
-              print(f"Last word: {words[-1]}")
-          EOF
-
-      - name: Build Subtitle Filters
-        run: |
-          python3 - << 'EOF'
-          import json
-          import re
-
-          with open("words.json", encoding='utf-8') as f:
-              words = json.load(f)
-
-          print(f"Total words: {len(words)}")
-
-          if not words:
-              print("WARNING: No words - subtitles will be empty!")
-              with open("subtitle_filters.txt", "w") as f:
-                  f.write("")
-              exit(0)
-
-          font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-          filters = []
-
-          i = 0
-          while i < len(words):
-              group = words[i:i+3]
-
-              text = " ".join(w["word"] for w in group).upper()
-              text = re.sub(r"[\\'\"`~!@#$%^&*()+=\[\]{};:<>?/|]", "", text)
-              text = re.sub(r',', '', text)
-              text = re.sub(r'\.+$', '', text)
-              text = re.sub(r'\s+', ' ', text).strip()
-
-              if not text:
-                  i += 3
-                  continue
-
-              char_count = len(text)
-              if char_count <= 12:
-                  fontsize = 90
-              elif char_count <= 20:
-                  fontsize = 75
-              elif char_count <= 28:
-                  fontsize = 62
-              else:
-                  fontsize = 52
-
-              start = group[0]["start"]
-              end = group[-1]["start"] + group[-1]["duration"] + 0.1
-
-              f_str = (
-                  f"drawtext=fontfile={font}:"
-                  f"text='{text}':"
-                  f"x=(w-text_w)/2:"
-                  f"y=(h-text_h)/2:"
-                  f"fontsize={fontsize}:"
-                  f"fontcolor=yellow:"
-                  f"borderw=5:"
-                  f"bordercolor=black:"
-                  f"enable='between(t\\,{start:.3f}\\,{end:.3f})'"
-              )
-              filters.append(f_str)
-              i += 3
-
-          with open("subtitle_filters.txt", "w", encoding='utf-8') as f:
-              f.write(",".join(filters))
-
-          print(f"Generated {len(filters)} subtitle groups")
-          if filters:
-              print(f"First filter preview: {filters[0][:100]}...")
-          EOF
-
-      - name: Get Voice Duration
-        run: |
-          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 voice.mp3)
-          DURATION_INT=$(echo "$DURATION" | cut -d'.' -f1)
-          TOTAL=$((DURATION_INT + 3))
-          if [ "$TOTAL" -lt 20 ]; then TOTAL=20; fi
-          if [ "$TOTAL" -gt 58 ]; then TOTAL=58; fi
-          echo "duration=$TOTAL" >> $GITHUB_ENV
-          echo "Video duration: $TOTAL seconds"
-
-      - name: Download and Prepare Videos
-        run: |
-          python3 - << 'EOF'
-          import urllib.request
-          import json
-          import random
-          import os
-          import subprocess
-          import sys
-
-          api_key = os.environ.get('PIXABAY_API_KEY', '')
-          duration = int(os.environ.get('duration', 30))
-
-          clip_duration = max(4, duration // 6 + 1)
-          print(f"Total duration: {duration}s, clip duration: {clip_duration}s per clip")
-
-          headers = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-          }
-
-          queries = [
-              "bucharest city",
-              "colorful street market",
-              "food cooking fire",
-              "crowd festival colorful",
-              "city lights colorful",
-              "street food",
-              "vibrant market",
-              "romania traditional",
-              "bucharest architecture",
-              "happy people city"
-          ]
-
-          random.shuffle(queries)
-
-          videos = []
-          for query in queries:
-              if len(videos) >= 6:
-                  break
-              url = f"https://pixabay.com/api/videos/?key={api_key}&q={query.replace(' ', '+')}&per_page=10&min_duration=3"
-              try:
-                  req = urllib.request.Request(url, headers=headers)
-                  with urllib.request.urlopen(req, timeout=15) as r:
-                      data = json.loads(r.read())
-                      hits = data.get("hits", [])
-                      if hits:
-                          pick = random.choice(hits)
-                          videos.append(pick)
-                          print(f"Found: {pick['tags'][:50]}")
-              except Exception as e:
-                  print(f"Error: {e}")
-
-          if not videos:
-              print("No videos found!")
-              sys.exit(1)
-
-          downloaded = []
-          for i, video in enumerate(videos[:6]):
-              try:
-                  video_url = video["videos"]["medium"]["url"]
-                  raw = f"raw_{i+1}.mp4"
-                  req = urllib.request.Request(video_url, headers=headers)
-                  with urllib.request.urlopen(req, timeout=60) as response:
-                      with open(raw, 'wb') as f:
-                          f.write(response.read())
-                  print(f"Downloaded {raw}")
-                  downloaded.append(raw)
-              except Exception as e:
-                  print(f"Download error: {e}")
-
-          if not downloaded:
-              print("No videos downloaded!")
-              sys.exit(1)
-
-          trimmed = []
-          for i, raw in enumerate(downloaded):
-              output = f"clip_{i+1}.mp4"
-              result = subprocess.run(
-                  ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-                   '-of', 'default=noprint_wrappers=1:nokey=1', raw],
-                  capture_output=True, text=True)
-              try:
-                  orig_dur = float(result.stdout.strip())
-              except:
-                  orig_dur = 10
-
-              max_start = max(0, orig_dur - clip_duration - 0.5)
-              start_time = random.uniform(0, max_start) if max_start > 0 else 0
-
-              cmd = [
-                  'ffmpeg', '-hide_banner', '-loglevel', 'error',
-                  '-ss', str(start_time),
-                  '-i', raw,
-                  '-t', str(clip_duration),
-                  '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,eq=brightness=0.06:saturation=1.5:contrast=1.08,setsar=1',
-                  '-c:v', 'libx264', '-preset', 'veryfast', '-an', '-y', output
-              ]
-              result = subprocess.run(cmd)
-              if result.returncode == 0:
-                  trimmed.append(output)
-                  print(f"Processed {raw} -> {output} ({clip_duration}s)")
-              else:
-                  print(f"Failed to process {raw}")
-
-          if not trimmed:
-              print("No clips processed!")
-              sys.exit(1)
-
-          with open('clips.txt', 'w') as f:
-              for clip in trimmed:
-                  f.write(f"file '{clip}'\n")
-
-          print(f"Ready: {len(trimmed)} clips x {clip_duration}s = {len(trimmed)*clip_duration}s total")
-          EOF
+      # ---------------------------------------------------------------
+      # STREAM - ffmpeg 5h50min
+      # Input 0: camera RTSP
+      # Input 1: video.mp4 (animatie subscribe, GREEN SCREEN)
+      # Input 2: playlist.txt (muzica)
+      # ---------------------------------------------------------------
+      - name: Start Streaming (5h50min)
         env:
-          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-
-      - name: Combine Background Videos
+          SUBS: ${{ steps.subs.outputs.subs }}
+          PERCENT: ${{ steps.subs.outputs.percent }}
+          PERCENT_INT: ${{ steps.subs.outputs.percent_int }}
         run: |
-          ffmpeg -hide_banner -loglevel error \
-          -f concat -safe 0 -i clips.txt \
-          -t ${{ env.duration }} \
-          -c:v libx264 -preset veryfast -an \
-          -y combined_bg.mp4
-          echo "Combined video OK"
+          echo "=== START STREAM $(date -u) | Abonati: $SUBS / 1000 ($PERCENT_INT%) ==="
 
-      - name: Create Final Short
+          # Calculeaza latimea barei de progres (din 1920px)
+          BAR_WIDTH=$(echo "scale=0; 1920 * $PERCENT / 1" | bc)
+          if [ -z "$BAR_WIDTH" ] || [ "$BAR_WIDTH" -lt 1 ]; then BAR_WIDTH=1; fi
+
+          # Scrie filter_complex intr-un fisier ca sa evitam probleme de trunchiere bash
+          cat > /tmp/filter.txt << FILTEREOF
+[0:v]scale=1920:1080,setsar=1[cam];
+[1:v]scale=1920:1080,setsar=1[overlay_raw];
+[overlay_raw]chromakey=color=green:similarity=0.3:blend=0.05[overlay_keyed];
+[cam][overlay_keyed]overlay=0:0[with_overlay];
+[with_overlay]
+drawbox=x=0:y=1055:w=1920:h=25:color=black@0.75:t=fill,
+drawbox=x=0:y=1055:w=${BAR_WIDTH}:h=25:color=red@0.9:t=fill,
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${SUBS} / 1000 abonati':x=10:y=1060:fontsize=18:fontcolor=white:shadowcolor=black:shadowx=1:shadowy=1
+[final];
+[2:a]volume=0.35[aout]
+FILTEREOF
+
+          echo "=== Filter complex ==="
+          cat /tmp/filter.txt
+
+          timeout 21000 ffmpeg \
+            -hide_banner \
+            -loglevel warning \
+            -rtsp_transport tcp \
+            -i "${{ secrets.RTSP_URL }}" \
+            -stream_loop -1 -i "video.mp4" \
+            -stream_loop -1 -f concat -safe 0 -i "playlist.txt" \
+            -filter_complex_script /tmp/filter.txt \
+            -map "[final]" \
+            -map "[aout]" \
+            -c:v libx264 \
+            -preset veryfast \
+            -tune zerolatency \
+            -b:v 4500k \
+            -maxrate 4500k \
+            -bufsize 9000k \
+            -g 60 \
+            -c:a aac \
+            -b:a 128k \
+            -ar 44100 \
+            -f flv \
+            "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}" || true
+
+          echo "=== STREAM OPRIT $(date -u) ==="
+
+      - name: Pauza 10 minute intre sesiuni
+        run: sleep 600
+
+      - name: Keep Repository Active
         run: |
-          python3 - << 'EOF'
-          import os
-          import subprocess
-
-          lang = os.environ.get('lang', 'en')
-          duration = os.environ.get('duration', '30')
-          header = "STIAI CA?" if lang == "ro" else "DID YOU KNOW?"
-          font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-
-          with open("subtitle_filters.txt", "r", encoding="utf-8") as f:
-              subtitle_filters = f.read().strip()
-
-          print(f"Subtitle filters length: {len(subtitle_filters)}")
-          print(f"Has subtitles: {bool(subtitle_filters)}")
-
-          header_filter = (
-              f"[0:v]drawbox=x=0:y=0:w=1080:h=1920:color=black@0.12:t=fill,"
-              f"drawtext=fontfile={font}:"
-              f"text='{header}':"
-              f"x=(w-text_w)/2:"
-              f"y=80:"
-              f"fontsize=60:"
-              f"fontcolor=white:"
-              f"borderw=3:"
-              f"bordercolor=black"
-          )
-
-          if subtitle_filters:
-              full_filter = f"{header_filter},{subtitle_filters}[final]"
-          else:
-              full_filter = f"{header_filter}[final]"
-
-          full_filter += ";[1:a]volume=0.12[music];[2:a]volume=1.0[voice];[music][voice]amix=inputs=2:duration=first:weights=1 5[aout]"
-
-          with open("filter_complex.txt", "w", encoding="utf-8") as f:
-              f.write(full_filter)
-
-          print(f"Filter written to filter_complex.txt ({len(full_filter)} chars)")
-
-          cmd = [
-              "ffmpeg", "-hide_banner", "-loglevel", "warning",
-              "-i", "combined_bg.mp4",
-              "-stream_loop", "-1", "-i", "music1.mp3",
-              "-i", "voice.mp3",
-              "-filter_complex_script", "filter_complex.txt",
-              "-map", "[final]", "-map", "[aout]",
-              "-t", duration,
-              "-c:v", "libx264", "-preset", "veryfast", "-b:v", "6000k", "-pix_fmt", "yuv420p",
-              "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
-              "-y", "short_output.mp4"
-          ]
-
-          print("Running ffmpeg...")
-          result = subprocess.run(cmd)
-          if result.returncode != 0:
-              print("FFmpeg failed!")
-              exit(1)
-
-          print("Final short OK!")
-          print(f"Output size: {os.path.getsize('short_output.mp4')} bytes")
-          EOF
-
-      - name: Get YouTube Access Token
-        run: |
-          TOKEN_RESPONSE=$(curl -s -X POST https://oauth2.googleapis.com/token \
-            -d client_id=${{ secrets.YOUTUBE_CLIENT_ID }} \
-            -d client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }} \
-            -d refresh_token=${{ secrets.YOUTUBE_REFRESH_TOKEN }} \
-            -d grant_type=refresh_token)
-          ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token')
-          echo "access_token=$ACCESS_TOKEN" >> $GITHUB_ENV
-
-      - name: Upload Short to YouTube
-        run: |
-          TITLE="${{ env.title }}"
-          curl -s -X POST \
-          "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status" \
-          -H "Authorization: Bearer ${{ env.access_token }}" \
-          -F "metadata={\"snippet\":{\"title\":\"$TITLE\",\"description\":\"Amazing facts about Bucharest Romania! #Shorts #Bucharest #Romania #DidYouKnow #Facts #Travel #Europe #History #Culture\",\"tags\":[\"bucharest\",\"romania\",\"didyouknow\",\"shorts\",\"facts\",\"travel\",\"europe\",\"history\",\"culture\"],\"categoryId\":\"27\"},\"status\":{\"privacyStatus\":\"public\",\"selfDeclaredMadeForKids\":false}};type=application/json" \
-          -F "video=@short_output.mp4;type=video/mp4"
-
-      - name: Keep Repo Active
-        run: |
-          git config user.email "actions@github.com"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "GitHub Actions"
-          git commit --allow-empty -m "shorts generated $(date)"
+          git commit --allow-empty -m "keepalive: $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
