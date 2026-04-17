@@ -1,5 +1,4 @@
 name: Camera Obor FULL-HD PRO 24/7
-
 on:
   workflow_dispatch:
   schedule:
@@ -7,68 +6,66 @@ on:
     - cron: '0 12 * * *'
     - cron: '0 18 * * *'
     - cron: '0 0 * * *'
-
 concurrency:
   group: camera-stream
   cancel-in-progress: true
-
 jobs:
   run-stream:
     runs-on: ubuntu-latest
-    timeout-minutes: 375
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
       - name: Install Tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ffmpeg bc jq curl
-
+        run: sudo apt update && sudo apt install -y ffmpeg fonts-dejavu bc jq curl
       - name: Get Real Subs and Calculate Bar
         id: subs
-        env:
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: |
-          RESPONSE=$(curl -s "https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${CHANNEL_ID}&key=${YOUTUBE_API_KEY}")
-          SUBS=$(echo "$RESPONSE" | jq -r '.items[0].statistics.subscriberCount // "0"')
+          RESPONSE=$(curl -s 'https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${{ secrets.CHANNEL_ID }}&key=${{ secrets.YOUTUBE_API_KEY }}')
+          SUBS=$(echo $RESPONSE | jq -r '.items[0].statistics.subscriberCount')
           TARGET=1000
-          PERCENT_INT=$(( (SUBS * 100) / TARGET ))
-          if [ "$PERCENT_INT" -gt 100 ]; then PERCENT_INT=100; fi
-          PERCENT=$(echo "scale=4; $PERCENT_INT / 100" | bc)
-          echo "subs=$SUBS" >> $GITHUB_OUTPUT
-          echo "percent=$PERCENT" >> $GITHUB_OUTPUT
-
-      - name: Start Streaming (5h50min)
-        env:
-          SUBS: ${{ steps.subs.outputs.subs }}
-          PERCENT: ${{ steps.subs.outputs.percent }}
-          RTSP_URL: ${{ secrets.RTSP_URL }}
-          YOUTUBE_KEY: ${{ secrets.YOUTUBE_KEY }}
+          PERCENT=$(echo 'scale=2; $SUBS / $TARGET' | bc)
+          if (( $(echo '$PERCENT > 1.0' | bc -l) )); then PERCENT=1.0; fi
+          PERCENT_INT=$(echo '($SUBS * 100) / $TARGET' | bc)
+          echo '$SUBS ($PERCENT_INT%)' > stats.txt
+          echo 'percent=$PERCENT' >> $GITHUB_OUTPUT
+      - name: Create YouTube Broadcast
+        id: broadcast
         run: |
-          BAR_WIDTH=$(echo "scale=0; 1920 * $PERCENT / 1" | bc)
-          if [ -z "$BAR_WIDTH" ] || [ "$BAR_WIDTH" -lt 1 ]; then BAR_WIDTH=1; fi
-
-          # Generam filtrul curat pentru a evita erorile de spatiere in YAML
-          echo "[0:v]scale=1920:1080,setsar=1[cam]; [1:v]scale=1920:1080,setsar=1[overlay_raw]; [overlay_raw]chromakey=color=green:similarity=0.3:blend=0.05[overlay_keyed]; [cam][overlay_keyed]overlay=0:0[with_overlay]; [with_overlay]drawbox=x=0:y=1055:w=1920:h=25:color=black@0.75:t=fill, drawbox=x=0:y=1055:w=${BAR_WIDTH}:h=25:color=red@0.9:t=fill, drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${SUBS} / 1000 abonati':x=10:y=1060:fontsize=18:fontcolor=white:shadowcolor=black:shadowx=1:shadowy=1[final]; [2:a]volume=0.35[aout]" > /tmp/filter.txt
-
-          timeout 21000 ffmpeg \
-            -hide_banner -loglevel warning -rtsp_transport tcp \
-            -i "$RTSP_URL" \
-            -stream_loop -1 -i "video.mp4" \
-            -stream_loop -1 -f concat -safe 0 -i "playlist.txt" \
-            -filter_complex_script /tmp/filter.txt \
-            -map "[final]" -map "[aout]" \
-            -c:v libx264 -preset veryfast -tune zerolatency -b:v 4500k \
-            -maxrate 4500k -bufsize 9000k -g 60 \
-            -c:a aac -b:a 128k -ar 44100 -f flv \
-            "rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_KEY}" || true
-
-      - name: Keep Repository Active
+          TOKEN_RESPONSE=$(curl -s -X POST https://oauth2.googleapis.com/token \
+            -d client_id=${{ secrets.YOUTUBE_CLIENT_ID }} \
+            -d client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }} \
+            -d refresh_token=${{ secrets.YOUTUBE_REFRESH_TOKEN }} \
+            -d grant_type=refresh_token)
+          ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token')
+          echo 'access_token=$ACCESS_TOKEN' >> $GITHUB_ENV
+          START_TIME=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          BROADCAST=$(curl -s -X POST \
+            'https://www.googleapis.com/youtube/v3/liveBroadcasts?part=id,snippet,contentDetails,status' \
+            -H 'Authorization: Bearer $ACCESS_TOKEN' \
+            -H 'Content-Type: application/json' \
+            -d '{snippet:{title:LIVE Piata Obor...},status:{...},contentDetails:{enableAutoStart:true,enableAutoStop:true}}')
+          BROADCAST_ID=$(echo $BROADCAST | jq -r '.id')
+          echo 'broadcast_id=$BROADCAST_ID' >> $GITHUB_ENV
+      - name: Bind Broadcast to Stream
         run: |
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "GitHub Actions"
-          git commit --allow-empty -m "keepalive: $(date -u)"
-          git push
+          curl -s -X POST \
+          'https://www.googleapis.com/youtube/v3/liveBroadcasts/bind?id=${{ env.broadcast_id }}&part=id,contentDetails&streamId=${{ secrets.STREAM_ID }}' \
+          -H 'Authorization: Bearer ${{ env.access_token }}'
+      - name: Start Streaming (Live + ChromaKey + Music)
+        run: |
+          timeout 21000 ffmpeg -hide_banner -loglevel error \
+          -rtsp_transport tcp -i '${{ secrets.RTSP_URL }}' \
+          -stream_loop -1 -i 'video.mp4' \
+          -stream_loop -1 -f concat -safe 0 -i 'playlist.txt' \
+          -filter_complex '[0:v]scale=1920:1080...[final]; [2:a]volume=0.35[aout]' \
+          -map '[final]' -map '[aout]' \
+          -f flv 'rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}' || true
+      - name: Stop Broadcast
+        run: |
+          curl -s -X POST \
+          'https://www.googleapis.com/youtube/v3/liveBroadcasts/transition?broadcastStatus=complete&id=${{ env.broadcast_id }}&part=id,status' \
+          -H 'Authorization: Bearer ${{ env.access_token }}'
+      - name: Wait 10 minutes
+        run: sleep 600
+      - name: Keep Repo Active
+        run: git commit --allow-empty -m 'keep alive' && git push
