@@ -46,10 +46,10 @@ jobs:
         env:
           SUBS: ${{ steps.subs.outputs.subs }}
           PERCENT: ${{ steps.subs.outputs.percent }}
-          PERCENT_INT: ${{ steps.subs.outputs.percent_int }}
           RTSP_URL: ${{ secrets.RTSP_URL }}
           YOUTUBE_KEY: ${{ secrets.YOUTUBE_KEY }}
         run: |
+          # Calculeaza latimea barei de progres (din 1920px)
           BAR_WIDTH=$(echo "scale=0; 1920 * $PERCENT / 1" | bc)
           if [ -z "$BAR_WIDTH" ] || [ "$BAR_WIDTH" -lt 1 ]; then BAR_WIDTH=1; fi
 
@@ -65,31 +65,20 @@ drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${S
 FILTEREOF
 
           timeout 21000 ffmpeg \
-            -hide_banner \
-            -loglevel warning \
-            -rtsp_transport tcp \
+            -hide_banner -loglevel warning -rtsp_transport tcp \
             -i "$RTSP_URL" \
             -stream_loop -1 -i "video.mp4" \
             -stream_loop -1 -f concat -safe 0 -i "playlist.txt" \
             -filter_complex_script /tmp/filter.txt \
-            -map "[final]" \
-            -map "[aout]" \
-            -c:v libx264 \
-            -preset veryfast \
-            -tune zerolatency \
-            -b:v 4500k \
-            -maxrate 4500k \
-            -bufsize 9000k \
-            -g 60 \
-            -c:a aac \
-            -b:a 128k \
-            -ar 44100 \
-            -f flv \
+            -map "[final]" -map "[aout]" \
+            -c:v libx264 -preset veryfast -tune zerolatency -b:v 4500k \
+            -maxrate 4500k -bufsize 9000k -g 60 \
+            -c:a aac -b:a 128k -ar 44100 -f flv \
             "rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_KEY}" || true
 
       - name: Keep Repository Active
         run: |
-          git config user.email "actions@github.com"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "GitHub Actions"
-          git commit --allow-empty -m "keepalive"
+          git commit --allow-empty -m "keepalive: $(date -u)"
           git push
