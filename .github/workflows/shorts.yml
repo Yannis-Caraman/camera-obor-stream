@@ -90,13 +90,11 @@ jobs:
         env:
           PIXABAY_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: |
-          # Descarca un clip de fundal random
           VIDEO_URL=$(curl -s "https://pixabay.com/api/videos/?key=${PIXABAY_KEY}&q=city+bucharest&min_width=1280" | jq -r '.hits[0].videos.medium.url')
           curl -L -o bg.mp4 "$VIDEO_URL"
           
           DURATION=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 voice.mp3)
           
-          # Render final
           ffmpeg -i bg.mp4 -i voice.mp3 -filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[v];[v]$(paste -sd "," subtitle_filters.txt)[vout]" \
           -map "[vout]" -map "1:a" -c:v libx264 -preset fast -crf 22 -c:a aac -t "$DURATION" -y short_output.mp4
 
@@ -105,26 +103,67 @@ jobs:
           CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          LANG_CODE: ${{ steps.lang.outputs.lang }}
         run: |
           ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
             -d "client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&refresh_token=${REFRESH_TOKEN}&grant_type=refresh_token" | jq -r '.access_token')
           
-          FACT=$(cat tts_text.txt | cut -c1-90)
+          # Exportam variabilele pentru a le folosi in Python fara sa duplicam `env:` in YAML
+          export ACCESS_TOKEN="$ACCESS_TOKEN"
+          export SHORT_TITLE="Bucuresti: $(cat tts_text.txt | cut -c1-70) #Shorts"
           
-          # Upload simplificat via Python pentru a gestiona binary data
           python3 - << 'PYEOF'
-          import requests, os
-          token = os.environ.get('ACCESS_TOKEN')
+          import requests, os, sys
+
+          access_token = os.environ.get('ACCESS_TOKEN')
+          title = os.environ.get('SHORT_TITLE')
+          lang_code = os.environ.get('LANG_CODE')
+
           metadata = {
-              "snippet": {"title": os.environ.get('TITLE'), "categoryId": "22"},
-              "status": {"privacyStatus": "public"}
+              "snippet": {
+                  "title": title,
+                  "description": title,
+                  "tags": ["Bucharest", "Romania", "Shorts", "facts"],
+                  "categoryId": "22",
+                  "defaultLanguage": lang_code
+              },
+              "status": {
+                  "privacyStatus": "public",
+                  "selfDeclaredMadeForKids": False
+              }
           }
-          # Initializare si upload (prescurtat pentru spatiu)
-          # Recomand folosirea bibliotecii google-api-python-client pentru stabilitate maxima
+
+          headers = {
+              "Authorization": f"Bearer {access_token}",
+              "X-Upload-Content-Type": "video/mp4"
+          }
+
+          init_resp = requests.post(
+              "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+              headers=headers, json=metadata
+          )
+
+          if init_resp.status_code not in [200, 201]:
+              print("Eroare initializare:", init_resp.text)
+              sys.exit(1)
+
+          upload_url = init_resp.headers.get('Location')
+          
+          with open('short_output.mp4', 'rb') as f:
+              video_data = f.read()
+
+          upload_resp = requests.put(
+              upload_url,
+              headers={"Content-Type": "video/mp4", "Content-Length": str(len(video_data))},
+              data=video_data, timeout=300
+          )
+
+          if upload_resp.status_code in [200, 201]:
+              print(f"SUCCESS! Uploadat: https://www.youtube.com/shorts/{upload_resp.json().get('id')}")
+          else:
+              print("Eroare upload:", upload_resp.text)
+              sys.exit(1)
           PYEOF
-        env:
-          ACCESS_TOKEN: ${{ env.ACCESS_TOKEN }}
-          TITLE: "Bucuresti: $(cat tts_text.txt | cut -c1-70) #Shorts"
 
       - name: Keep Repository Active
         run: |
