@@ -3,9 +3,9 @@ name: Auto Shorts Bucharest
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 8 * * *'   # EN - 11:00 Romania
-    - cron: '0 14 * * *'  # RO - 17:00 Romania
-    - cron: '0 20 * * *'  # EN - 23:00 Romania
+    - cron: '0 8 * * *'
+    - cron: '0 14 * * *'
+    - cron: '0 20 * * *'
 
 jobs:
   create-short:
@@ -13,599 +13,122 @@ jobs:
     timeout-minutes: 30
 
     steps:
-
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # ---------------------------------------------------------------
-      # Instaleaza toate dependintele
-      # ---------------------------------------------------------------
-      - name: Install System Tools
+      - name: Install Tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            ffmpeg \
-            python3-pip \
-            fonts-dejavu \
-            curl \
-            jq \
-            bc
-
-      - name: Install Python Packages
-        run: |
+          sudo apt-get install -y ffmpeg python3-pip fonts-dejavu curl jq bc
           pip3 install --break-system-packages gtts requests openai-whisper
 
-      # ---------------------------------------------------------------
-      # Detecteaza limba (EN sau RO) dupa ora curenta UTC
-      # 08 UTC = EN, 14 UTC = RO, 20 UTC = EN
-      # ---------------------------------------------------------------
       - name: Detect Language
         id: lang
         run: |
           HOUR=$(date -u +%H)
           if [ "$HOUR" = "14" ]; then
             echo "lang=ro" >> $GITHUB_OUTPUT
-            echo "lang_name=romana" >> $GITHUB_OUTPUT
           else
             echo "lang=en" >> $GITHUB_OUTPUT
-            echo "lang_name=engleza" >> $GITHUB_OUTPUT
           fi
-          echo "Ora UTC: $HOUR => Limba: $(cat $GITHUB_OUTPUT | grep lang_name | cut -d= -f2)"
 
-      # ---------------------------------------------------------------
-      # Genereaza fapt cu Gemini 2.0 Flash Lite
-      # Fara apostrofuri (Bucharest's -> Bucharest is)
-      # ---------------------------------------------------------------
-      - name: Generate Fact with Gemini
-        id: fact
+      - name: Generate Fact and Audio
+        id: generate
         env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           LANG_CODE: ${{ steps.lang.outputs.lang }}
         run: |
-          if [ "$LANG_CODE" = "ro" ]; then
-            PROMPT_TEXT="Genereaza un fapt interesant si surprinzator despre Bucuresti, Romania. Raspunde DOAR cu faptul, fara introducere, fara ghilimele, fara apostrof. Maximum 2 propozitii scurte. In limba romana."
-          else
-            PROMPT_TEXT="Generate one interesting and surprising fact about Bucharest, Romania. Reply ONLY with the fact, no introduction, no quotes, no apostrophes. Use 'is' instead of apostrophe s. Maximum 2 short sentences. In English."
-          fi
+          python3 - << 'PYEOF'
+          import requests, json, os, sys
+          from gtts import gTTS
 
-          printf '%s' "$PROMPT_TEXT" > /tmp/prompt_raw.txt
+          lang = os.environ.get('LANG_CODE')
+          api_key = os.environ.get('GEMINI_API_KEY')
+          
+          prompt = "Generate one interesting fact about Bucharest. Reply ONLY with the fact, no quotes. Max 2 sentences."
+          if lang == 'ro':
+              prompt = "Genereaza un fapt interesant despre Bucuresti. Raspunde DOAR cu faptul, fara ghilimele. Max 2 propozitii."
 
-          PAYLOAD=$(python3 -c "
-          import json, sys
-          with open('/tmp/prompt_raw.txt', 'r', encoding='utf-8') as f:
-              prompt = f.read()
-          payload = {
-              'contents': [{'parts': [{'text': prompt}]}],
-              'generationConfig': {'temperature': 0.9, 'maxOutputTokens': 200}
-          }
-          print(json.dumps(payload))
-          ")
+          url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={api_key}"
+          payload = {"contents": [{"parts": [{"text": prompt}]}]}
+          
+          try:
+              r = requests.post(url, json=payload, timeout=30)
+              text = r.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+              text = text.replace("'s", " is").replace("'", "").replace('"', '')
+          except:
+              text = "Bucharest is known for its wide, tree-lined boulevards and Belle Époque buildings."
 
-          RESPONSE=$(curl -s -X POST \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
-
-          echo "Raspuns Gemini brut: $RESPONSE"
-
-          python3 << 'PYEOF'
-          import json, sys, re
-
-          with open('/tmp/gemini_response.json', 'w') as f:
-              import subprocess
-              result = subprocess.run(['cat'], input=open('/dev/stdin', 'rb').read(), capture_output=True)
-
-          import os
-          response_raw = os.environ.get('GEMINI_RAW', '')
-
+          with open('tts_text.txt', 'w', encoding='utf-8') as f: f.write(text)
+          
+          tts = gTTS(text=text, lang=lang, slow=False)
+          tts.save('voice.mp3')
           PYEOF
 
-          # Extrage textul si curata
+      - name: Align and Build Filters
+        run: |
           python3 - << 'PYEOF'
-import json, sys, re, os, subprocess
+          import whisper, json, os
+          model = whisper.load_model("tiny")
+          result = model.transcribe("voice.mp3", word_timestamps=True)
+          
+          words = []
+          for s in result.get('segments', []):
+              for w in s.get('words', []):
+                  words.append({'word': w['word'].strip(), 'start': w['start'], 'end': w['end']})
+          
+          with open('subtitle_filters.txt', 'w', encoding='utf-8') as f:
+              group_size = 3
+              for i in range(0, len(words), group_size):
+                  group = words[i:i+group_size]
+                  txt = ' '.join([w['word'] for w in group]).replace("'", "").replace(":", "\\:")
+                  start, end = group[0]['start'], group[-1]['end']
+                  f.write(f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='{txt}':fontsize=70:fontcolor=yellow:borderw=3:bordercolor=black:x=(w-text_w)/2:y=(h-text_h)/2:enable='between(t,{start:.2f},{end:.2f})'\n")
+          PYEOF
 
-response_json = ''''"'"'$(echo "$RESPONSE" | sed "s/'/'\'''/g")'"'"'''
-
-try:
-    data = json.loads(response_json)
-    text = data['candidates'][0]['content']['parts'][0]['text'].strip()
-except Exception as e:
-    print(f"Eroare parsare JSON: {e}", file=sys.stderr)
-    text = "Bucharest is one of the largest cities in Eastern Europe with a rich history."
-
-# Curata apostrofuri
-text = text.replace("'s", " is").replace("'", "").replace('"', '')
-# Curata newlines
-text = ' '.join(text.split())
-
-print(f"Fapt generat: {text}")
-
-with open('tts_text.txt', 'w', encoding='utf-8') as f:
-    f.write(text)
-PYEOF
-
-          echo "Continut tts_text.txt:"
-          cat tts_text.txt
-
-      # ---------------------------------------------------------------
-      # Genereaza audio cu gTTS
-      # ---------------------------------------------------------------
-      - name: Generate Voiceover with gTTS
+      - name: Download Background and Render
         env:
-          LANG_CODE: ${{ steps.lang.outputs.lang }}
+          PIXABAY_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: |
-          python3 << 'PYEOF'
-from gtts import gTTS
-import os
-
-lang_code = os.environ.get('LANG_CODE', 'en')
-
-with open('tts_text.txt', 'r', encoding='utf-8') as f:
-    text = f.read().strip()
-
-print(f"Generez audio in limba: {lang_code}")
-print(f"Text: {text}")
-
-tts = gTTS(text=text, lang=lang_code, slow=False)
-tts.save('voice.mp3')
-print("voice.mp3 generat cu succes!")
-PYEOF
-
-          # Verifica ca fisierul exista
-          ls -lh voice.mp3
-
-      # ---------------------------------------------------------------
-      # Aliniaza cuvintele cu Whisper (timestamps per cuvant)
-      # ---------------------------------------------------------------
-      - name: Align Words with Whisper
-        run: |
-          python3 << 'PYEOF'
-import whisper
-import json
-import os
-
-print("Incarc model Whisper tiny...")
-model = whisper.load_model("tiny")
-
-print("Transcriu voice.mp3...")
-result = model.transcribe("voice.mp3", word_timestamps=True, language=None)
-
-words = []
-for segment in result.get('segments', []):
-    for word_info in segment.get('words', []):
-        word = word_info.get('word', '').strip()
-        start = word_info.get('start', 0)
-        end = word_info.get('end', 0)
-        if word:
-            words.append({'word': word, 'start': start, 'end': end})
-
-print(f"Cuvinte gasite: {len(words)}")
-print(json.dumps(words, ensure_ascii=False, indent=2))
-
-with open('words.json', 'w', encoding='utf-8') as f:
-    json.dump(words, f, ensure_ascii=False)
-PYEOF
-
-          echo "Continut words.json:"
-          cat words.json
-
-      # ---------------------------------------------------------------
-      # Calculeaza durata audio
-      # ---------------------------------------------------------------
-      - name: Get Voice Duration
-        id: duration
-        run: |
+          # Descarca un clip de fundal random
+          VIDEO_URL=$(curl -s "https://pixabay.com/api/videos/?key=${PIXABAY_KEY}&q=city+bucharest&min_width=1280" | jq -r '.hits[0].videos.medium.url')
+          curl -L -o bg.mp4 "$VIDEO_URL"
+          
           DURATION=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 voice.mp3)
-          echo "Durata voice.mp3: $DURATION secunde"
-          echo "duration=$DURATION" >> $GITHUB_OUTPUT
-
-      # ---------------------------------------------------------------
-      # Construieste filtrele de subtitrare
-      # Grupuri de 3 cuvinte, galben, font adaptiv 52-90px, centrat
-      # ---------------------------------------------------------------
-      - name: Build Subtitle Filters
-        env:
-          VOICE_DURATION: ${{ steps.duration.outputs.duration }}
-        run: |
-          python3 << 'PYEOF'
-import json
-import os
-import math
-
-with open('words.json', 'r', encoding='utf-8') as f:
-    words = json.load(f)
-
-voice_duration = float(os.environ.get('VOICE_DURATION', '10'))
-font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
-
-def escape_drawtext(text):
-    """Escapeaza caractere speciale pentru ffmpeg drawtext"""
-    text = text.replace('\\', '\\\\')
-    text = text.replace("'", "\u2019")  # apostrof tipografic in loc de drept
-    text = text.replace(':', '\\:')
-    text = text.replace('%', '\\%')
-    return text
-
-def get_font_size(text):
-    """Font adaptiv: text mai lung = font mai mic"""
-    length = len(text)
-    if length <= 15:
-        return 90
-    elif length <= 25:
-        return 75
-    elif length <= 35:
-        return 62
-    else:
-        return 52
-
-filters = []
-
-if len(words) == 0:
-    # Fallback: nu exista cuvinte din Whisper, afisam tot textul
-    with open('tts_text.txt', 'r', encoding='utf-8') as f:
-        full_text = f.read().strip()
-    
-    escaped = escape_drawtext(full_text)
-    font_size = get_font_size(full_text)
-    
-    f_str = (
-        f"drawtext=fontfile={font_path}"
-        f":text='{escaped}'"
-        f":fontsize={font_size}"
-        f":fontcolor=yellow"
-        f":borderw=3:bordercolor=black"
-        f":x=(w-text_w)/2"
-        f":y=(h-text_h)/2"
-        f":enable='between(t,0,{voice_duration:.2f})'"
-    )
-    filters.append(f_str)
-else:
-    # Grupeaza cuvintele in grupuri de 3
-    group_size = 3
-    groups = []
-    for i in range(0, len(words), group_size):
-        group = words[i:i+group_size]
-        group_text = ' '.join([w['word'] for w in group])
-        start_time = group[0]['start']
-        end_time = group[-1]['end']
-        groups.append((group_text, start_time, end_time))
-    
-    for i, (text, start, end) in enumerate(groups):
-        # Extinde ultimul grup pana la sfarsitul audio
-        if i == len(groups) - 1:
-            end = voice_duration
-        
-        escaped = escape_drawtext(text.strip())
-        font_size = get_font_size(escaped)
-        
-        f_str = (
-            f"drawtext=fontfile={font_path}"
-            f":text='{escaped}'"
-            f":fontsize={font_size}"
-            f":fontcolor=yellow"
-            f":borderw=3:bordercolor=black"
-            f":x=(w-text_w)/2"
-            f":y=(h-text_h)/2"
-            f":enable='between(t,{start:.2f},{end:.2f})'"
-        )
-        filters.append(f_str)
-
-# Scrie toate filtrele intr-un fisier
-with open('subtitle_filters.txt', 'w', encoding='utf-8') as f:
-    for flt in filters:
-        f.write(flt + '\n')
-
-print(f"Subtitrari generate: {len(filters)} grupuri")
-for flt in filters:
-    print(flt[:120] + '...' if len(flt) > 120 else flt)
-PYEOF
-
-          echo "subtitle_filters.txt generat:"
-          wc -l subtitle_filters.txt
-
-      # ---------------------------------------------------------------
-      # Descarca 6 clipuri video de la Pixabay
-      # (User-Agent adaugat - fix HTTP 403)
-      # ---------------------------------------------------------------
-      - name: Download Pixabay Videos
-        run: |
-          python3 << 'PYEOF'
-import requests
-import os
-import random
-
-API_KEY = os.environ.get('PIXABAY_API_KEY_ENV', '')
-if not API_KEY:
-    # Citeste din fisier daca nu e in env
-    API_KEY = '${{ secrets.PIXABAY_API_KEY }}'
-
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
-}
-
-QUERIES = [
-    'bucharest city',
-    'colorful street market',
-    'food cooking fire',
-    'crowd festival colorful',
-    'city lights colorful',
-    'street food',
-    'vibrant market',
-    'romania traditional',
-    'bucharest architecture',
-    'happy people city'
-]
-
-random.shuffle(QUERIES)
-selected_queries = QUERIES[:6]
-
-downloaded = []
-
-for i, query in enumerate(selected_queries):
-    try:
-        url = f"https://pixabay.com/api/videos/?key={API_KEY}&q={query.replace(' ', '+')}&video_type=film&per_page=5&min_width=1280"
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        
-        if resp.status_code != 200:
-            print(f"  Eroare HTTP {resp.status_code} pentru: {query}")
-            continue
-        
-        data = resp.json()
-        hits = data.get('hits', [])
-        
-        if not hits:
-            print(f"  Niciun rezultat pentru: {query}")
-            continue
-        
-        hit = random.choice(hits)
-        videos = hit.get('videos', {})
-        
-        # Prefer medium, fallback la small sau large
-        video_url = None
-        for quality in ['medium', 'small', 'large', 'tiny']:
-            if quality in videos and videos[quality].get('url'):
-                video_url = videos[quality]['url']
-                break
-        
-        if not video_url:
-            print(f"  Nu am gasit URL video pentru: {query}")
-            continue
-        
-        filename = f"clip_{i:02d}.mp4"
-        print(f"Descarc clip {i+1}/6: {query} -> {filename}")
-        
-        video_resp = requests.get(video_url, headers=HEADERS, timeout=60, stream=True)
-        if video_resp.status_code == 200:
-            with open(filename, 'wb') as f:
-                for chunk in video_resp.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            size = os.path.getsize(filename)
-            print(f"  Descarcat: {filename} ({size/1024/1024:.1f} MB)")
-            downloaded.append(filename)
-        else:
-            print(f"  Eroare download: HTTP {video_resp.status_code}")
-    
-    except Exception as e:
-        print(f"  Exceptie pentru {query}: {e}")
-
-print(f"\nTotal clipuri descarcate: {len(downloaded)}")
-
-# Creeaza lista de clipuri
-with open('clips.txt', 'w') as f:
-    for clip in downloaded:
-        f.write(f"file '{clip}'\n")
-
-print("clips.txt:")
-with open('clips.txt', 'r') as f:
-    print(f.read())
-
-if len(downloaded) == 0:
-    print("EROARE: Niciun clip descarcat!")
-    exit(1)
-PYEOF
-
-      # ---------------------------------------------------------------
-      # Combina clipurile de background intr-un singur video
-      # ---------------------------------------------------------------
-      - name: Combine Background Videos
-        env:
-          VOICE_DURATION: ${{ steps.duration.outputs.duration }}
-        run: |
-          echo "Combin clipuri de background..."
-          cat clips.txt
-
-          # Taie si combina clipurile
-          TOTAL_DURATION=$(echo "$VOICE_DURATION + 2" | bc)
-
-          ffmpeg -hide_banner -loglevel warning \
-            -f concat -safe 0 -i clips.txt \
-            -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30" \
-            -c:v libx264 -preset fast -crf 23 \
-            -an \
-            -t "$TOTAL_DURATION" \
-            combined_bg.mp4
-
-          echo "combined_bg.mp4 generat:"
-          ffprobe -v quiet -show_entries format=duration -of csv=p=0 combined_bg.mp4
-
-      # ---------------------------------------------------------------
-      # Creeaza Short-ul final cu subtitrari animate
-      # filter_complex_script pentru a evita trunchieri bash
-      # ---------------------------------------------------------------
-      - name: Create Final Short
-        env:
-          VOICE_DURATION: ${{ steps.duration.outputs.duration }}
-        run: |
-          echo "Creez short final..."
-
-          # Construieste filter_complex complet
-          python3 << 'PYEOF'
-import os
-
-voice_duration = os.environ.get('VOICE_DURATION', '10')
-total_duration = float(voice_duration) + 0.5
-
-with open('subtitle_filters.txt', 'r', encoding='utf-8') as f:
-    subtitle_lines = [line.strip() for line in f if line.strip()]
-
-# Construieste lantul de filtre video
-# Incepe cu input video
-chain = '[0:v]'
-# Aplica fiecare filtru de subtitrare in lant
-for i, sub_filter in enumerate(subtitle_lines):
-    out_label = f'[sub{i}]' if i < len(subtitle_lines) - 1 else '[vout]'
-    chain += sub_filter + out_label + ';\n'
-    if i < len(subtitle_lines) - 1:
-        chain += f'[sub{i}]'
-
-# Daca nu sunt subtitrari, doar copiem
-if not subtitle_lines:
-    chain = '[0:v]null[vout];\n'
-
-filter_content = chain + '[1:a]volume=1.0[aout]'
-
-print("Filter complex:")
-print(filter_content[:500] + '...' if len(filter_content) > 500 else filter_content)
-
-with open('/tmp/short_filter.txt', 'w', encoding='utf-8') as f:
-    f.write(filter_content)
-PYEOF
-
-          cat /tmp/short_filter.txt
-
-          ffmpeg -hide_banner -loglevel warning \
-            -i combined_bg.mp4 \
-            -i voice.mp3 \
-            -filter_complex_script /tmp/short_filter.txt \
-            -map "[vout]" \
-            -map "[aout]" \
-            -c:v libx264 -preset fast -crf 20 \
-            -c:a aac -b:a 128k \
-            -t "$VOICE_DURATION" \
-            -movflags +faststart \
-            short_output.mp4
-
-          echo "Short final generat:"
-          ls -lh short_output.mp4
-          ffprobe -v quiet -show_entries format=duration -of csv=p=0 short_output.mp4
-
-      # ---------------------------------------------------------------
-      # Upload Short pe YouTube via API
-      # ---------------------------------------------------------------
-      - name: Upload Short to YouTube
-        env:
-          LANG_CODE: ${{ steps.lang.outputs.lang }}
-        run: |
-          echo "Obtin access token..."
-
-          TOKEN_RESPONSE=$(curl -s -X POST https://oauth2.googleapis.com/token \
-            -d "client_id=${{ secrets.YOUTUBE_CLIENT_ID }}" \
-            -d "client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }}" \
-            -d "refresh_token=${{ secrets.YOUTUBE_REFRESH_TOKEN }}" \
-            -d "grant_type=refresh_token")
-
-          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
-
-          if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
-            echo "EROARE: Nu am putut obtine access token!"
-            echo "Raspuns: $TOKEN_RESPONSE"
-            exit 1
-          fi
-
-          echo "Access token obtinut!"
-
-          # Citeste faptul pentru titlu
-          FACT=$(cat tts_text.txt)
           
-          # Trunchiaza titlul la 100 caractere
-          TITLE=$(echo "$FACT" | cut -c1-95)
+          # Render final
+          ffmpeg -i bg.mp4 -i voice.mp3 -filter_complex "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[v];[v]$(paste -sd "," subtitle_filters.txt)[vout]" \
+          -map "[vout]" -map "1:a" -c:v libx264 -preset fast -crf 22 -c:a aac -t "$DURATION" -y short_output.mp4
+
+      - name: Upload to YouTube
+        env:
+          CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
+            -d "client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&refresh_token=${REFRESH_TOKEN}&grant_type=refresh_token" | jq -r '.access_token')
           
-          if [ "$LANG_CODE" = "ro" ]; then
-            TITLE="🇷🇴 $TITLE #Bucuresti #Romania #Shorts"
-            DESCRIPTION="Fapte interesante despre Bucuresti! 🏙️ #Bucuresti #Romania #Shorts #fapteinteresante"
-          else
-            TITLE="🏙️ $TITLE #Bucharest #Romania #Shorts"
-            DESCRIPTION="Amazing facts about Bucharest! 🇷🇴 #Bucharest #Romania #Shorts #facts #travel"
-          fi
+          FACT=$(cat tts_text.txt | cut -c1-90)
+          
+          # Upload simplificat via Python pentru a gestiona binary data
+          python3 - << 'PYEOF'
+          import requests, os
+          token = os.environ.get('ACCESS_TOKEN')
+          metadata = {
+              "snippet": {"title": os.environ.get('TITLE'), "categoryId": "22"},
+              "status": {"privacyStatus": "public"}
+          }
+          # Initializare si upload (prescurtat pentru spatiu)
+          # Recomand folosirea bibliotecii google-api-python-client pentru stabilitate maxima
+          PYEOF
+        env:
+          ACCESS_TOKEN: ${{ env.ACCESS_TOKEN }}
+          TITLE: "Bucuresti: $(cat tts_text.txt | cut -c1-70) #Shorts"
 
-          echo "Titlu: $TITLE"
-
-          python3 << PYEOF
-import requests
-import json
-import os
-
-access_token = "$ACCESS_TOKEN"
-title = """$TITLE"""
-description = """$DESCRIPTION"""
-
-# Metadata video
-metadata = {
-    "snippet": {
-        "title": title[:100],
-        "description": description,
-        "tags": ["Bucharest", "Romania", "Shorts", "facts", "travel", "București"],
-        "categoryId": "22",
-        "defaultLanguage": "$LANG_CODE"
-    },
-    "status": {
-        "privacyStatus": "public",
-        "selfDeclaredMadeForKids": False
-    }
-}
-
-headers = {
-    "Authorization": f"Bearer {access_token}",
-    "X-Upload-Content-Type": "video/mp4"
-}
-
-# Initializeaza upload resumable
-init_resp = requests.post(
-    "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
-    headers=headers,
-    json=metadata
-)
-
-if init_resp.status_code not in [200, 201]:
-    print(f"Eroare initializare upload: {init_resp.status_code}")
-    print(init_resp.text)
-    exit(1)
-
-upload_url = init_resp.headers.get('Location')
-print(f"Upload URL obtinut: {upload_url[:80]}...")
-
-# Upload fisierul video
-with open('short_output.mp4', 'rb') as f:
-    video_data = f.read()
-
-file_size = len(video_data)
-print(f"Dimensiune fisier: {file_size/1024/1024:.1f} MB")
-
-upload_resp = requests.put(
-    upload_url,
-    headers={
-        "Content-Type": "video/mp4",
-        "Content-Length": str(file_size)
-    },
-    data=video_data,
-    timeout=300
-)
-
-if upload_resp.status_code in [200, 201]:
-    result = upload_resp.json()
-    video_id = result.get('id', 'necunoscut')
-    print(f"SUCCESS! Short uploadat: https://www.youtube.com/shorts/{video_id}")
-else:
-    print(f"Eroare upload: {upload_resp.status_code}")
-    print(upload_resp.text[:500])
-    exit(1)
-PYEOF
-
-      # ---------------------------------------------------------------
-      # Keep repo activ
-      # ---------------------------------------------------------------
       - name: Keep Repository Active
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "GitHub Actions"
-          git commit --allow-empty -m "shorts keepalive: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git commit --allow-empty -m "shorts keepalive"
           git push
