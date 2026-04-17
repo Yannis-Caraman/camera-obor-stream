@@ -1,117 +1,126 @@
 name: Camera Obor FULL-HD PRO 24/7
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 6 * * *'
-    - cron: '0 12 * * *'
-    - cron: '0 18 * * *'
-    - cron: '0 0 * * *'
+    - cron: '0 6 * * *'   # 09:00 Romania
+    - cron: '0 12 * * *'  # 15:00 Romania
+    - cron: '0 18 * * *'  # 21:00 Romania
+    - cron: '0 0 * * *'   # 03:00 Romania
+
 concurrency:
   group: camera-stream
   cancel-in-progress: true
+
 jobs:
   run-stream:
     runs-on: ubuntu-latest
+    timeout-minutes: 375  # 6h15min - safety net la nivel de job
+
     steps:
+
+      # ------------------------------------------------------------------ #
+      # 1. Checkout repo
+      # ------------------------------------------------------------------ #
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------------------ #
+      # 2. Instaleaza ffmpeg si unelte
+      # ------------------------------------------------------------------ #
       - name: Install Tools
-        run: sudo apt update && sudo apt install -y ffmpeg fonts-dejavu bc jq curl
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg bc jq curl
 
-      - name: Get Real Subs and Calculate Bar
+      # ------------------------------------------------------------------ #
+      # 3. Citeste numarul de abonati (foloseste API Key, NU OAuth)
+      # ------------------------------------------------------------------ #
+      - name: Get Subscriber Count
         id: subs
         run: |
-          RESPONSE=$(curl -s "https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${{ secrets.CHANNEL_ID }}&key=${{ secrets.YOUTUBE_API_KEY }}")
-          SUBS=$(echo $RESPONSE | jq -r '.items[0].statistics.subscriberCount')
+          echo "=== Citesc abonati canal ==="
+          RESPONSE=$(curl -s \
+            "https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${{ secrets.CHANNEL_ID }}&key=${{ secrets.YOUTUBE_API_KEY }}")
+
+          SUBS=$(echo "$RESPONSE" | jq -r '.items[0].statistics.subscriberCount // "0"')
+          echo "Abonati gasiti: $SUBS"
+
           TARGET=1000
-          PERCENT=$(echo "scale=2; $SUBS / $TARGET" | bc)
-          if (( $(echo "$PERCENT > 1.0" | bc -l) )); then PERCENT=1.0; fi
-          PERCENT_INT=$(echo "($SUBS * 100) / $TARGET" | bc)
-          echo "$SUBS ($PERCENT_INT%)" > stats.txt
-          echo "percent=$PERCENT" >> $GITHUB_OUTPUT
+          if [ "$SUBS" -eq 0 ]; then
+            PERCENT_INT=0
+          else
+            PERCENT_INT=$(( (SUBS * 100) / TARGET ))
+          fi
 
-      - name: Create YouTube Broadcast
-        id: broadcast
+          if [ "$PERCENT_INT" -gt 100 ]; then PERCENT_INT=100; fi
+
+          echo "Progres spre 1000: $SUBS / $TARGET ($PERCENT_INT%)"
+          echo "subs=$SUBS" >> $GITHUB_OUTPUT
+          echo "percent_int=$PERCENT_INT" >> $GITHUB_OUTPUT
+
+      # ------------------------------------------------------------------ #
+      # 4. STREAM - ffmpeg ruleaza exact 5h50min (21000 secunde)
+      #    - Input 0: camera RTSP
+      #    - Input 1: video.mp4 (animatie subscribe green screen)
+      #    - Input 2: playlist.txt (muzica lounge)
+      #    Dupa 21000 secunde ffmpeg se opreste singur.
+      #    YouTube inchide live-ul automat cand nu mai primeste date.
+      #    La urmatorul cron (6 ore mai tarziu) un nou stream porneste.
+      # ------------------------------------------------------------------ #
+      - name: Start Streaming (5h50min)
         run: |
-          TOKEN_RESPONSE=$(curl -s -X POST https://oauth2.googleapis.com/token \
-            -d client_id=${{ secrets.YOUTUBE_CLIENT_ID }} \
-            -d client_secret=${{ secrets.YOUTUBE_CLIENT_SECRET }} \
-            -d refresh_token=${{ secrets.YOUTUBE_REFRESH_TOKEN }} \
-            -d grant_type=refresh_token)
-          ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token')
-          echo "access_token=$ACCESS_TOKEN" >> $GITHUB_ENV
+          echo "=== START STREAM - $(date -u) ==="
+          echo "Abonati: ${{ steps.subs.outputs.subs }} / 1000"
 
-          START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          timeout 21000 ffmpeg \
+            -hide_banner \
+            -loglevel error \
+            -rtsp_transport tcp \
+            -i "${{ secrets.RTSP_URL }}" \
+            -stream_loop -1 \
+            -i "video.mp4" \
+            -stream_loop -1 \
+            -f concat -safe 0 \
+            -i "playlist.txt" \
+            -filter_complex \
+              "[1:v]colorkey=0x00FF00:0.3:0.1[subscribe_overlay]; \
+               [0:v]scale=1920:1080,format=yuv420p[cam]; \
+               [cam][subscribe_overlay]overlay=W-w-30:H-h-30[final]; \
+               [2:a]volume=0.35[music_out]" \
+            -map "[final]" \
+            -map "[music_out]" \
+            -c:v libx264 \
+            -preset veryfast \
+            -tune zerolatency \
+            -b:v 4500k \
+            -maxrate 4500k \
+            -bufsize 9000k \
+            -g 60 \
+            -c:a aac \
+            -b:a 128k \
+            -ar 44100 \
+            -f flv \
+            "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}" || true
 
-          BROADCAST=$(curl -s -X POST \
-            "https://www.googleapis.com/youtube/v3/liveBroadcasts?part=id,snippet,contentDetails,status" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"snippet\": {
-                \"title\": \"🔴 LIVE Piata Obor Bucuresti 24/7\",
-                \"scheduledStartTime\": \"$START_TIME\",
-                \"description\": \"Live stream 24/7 din Piata Obor, Bucuresti. Camera live HD non-stop.\"
-              },
-              \"status\": {
-                \"privacyStatus\": \"public\",
-                \"selfDeclaredMadeForKids\": false
-              },
-              \"contentDetails\": {
-                \"enableAutoStart\": true,
-                \"enableAutoStop\": true,
-                \"latencyPreference\": \"normal\"
-              }
-            }")
+          echo "=== STREAM OPRIT - $(date -u) ==="
 
-          echo "BROADCAST RESPONSE: $BROADCAST"
-          BROADCAST_ID=$(echo $BROADCAST | jq -r '.id')
-          echo "broadcast_id=$BROADCAST_ID" >> $GITHUB_ENV
-          echo "Broadcast ID: $BROADCAST_ID"
-
-      - name: Bind Broadcast to Stream
+      # ------------------------------------------------------------------ #
+      # 5. Asteapta 10 minute inainte ca urmatorul cron sa preia
+      #    (buffer intre sesiuni - YouTube are nevoie de ~30-60s oricum)
+      # ------------------------------------------------------------------ #
+      - name: Pauza 10 minute intre sesiuni
         run: |
-          BIND=$(curl -s -X POST \
-            "https://www.googleapis.com/youtube/v3/liveBroadcasts/bind?id=${{ env.broadcast_id }}&part=id,contentDetails&streamId=${{ secrets.STREAM_ID }}" \
-            -H "Authorization: Bearer ${{ env.access_token }}" \
-            -H "Content-Type: application/json")
-          echo "BIND RESPONSE: $BIND"
+          echo "Pauza 10 minute... urmatoarea sesiune porneste la urmatorul cron."
+          sleep 600
 
-      - name: Start Streaming (Live + ChromaKey MP4 Overlay + Music)
+      # ------------------------------------------------------------------ #
+      # 6. Commit gol ca sa tina repo-ul activ (GitHub dezactiveaza
+      #    Actions pe repo-uri inactive 60 zile)
+      # ------------------------------------------------------------------ #
+      - name: Keep Repository Active
         run: |
-          timeout 21000 ffmpeg -hide_banner -loglevel error \
-          -rtsp_transport tcp -i "${{ secrets.RTSP_URL }}" \
-          -stream_loop -1 -i "video.mp4" \
-          -stream_loop -1 -f concat -safe 0 -i "playlist.txt" \
-          -filter_complex "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg]; \
-          [1:v]format=rgba,colorkey=0x00FF00:0.35:0.15,scale=1000:-1[vid]; \
-          [bg][vid]overlay=x=80:y=(H-h)/2, \
-          drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='ROAD TO 1000 SUBS!':x=(w-text_w)/2:y=860:fontsize=35:fontcolor=white:shadowcolor=black:shadowx=3:shadowy=3, \
-          drawbox=x=557:y=910:w=806:h=66:color=0xFF00FF@0.9:t=fill, \
-          drawbox=x=560:y=913:w=800:h=60:color=black@0.9:t=fill, \
-          drawbox=x=560:y=913:w=800*${{ steps.subs.outputs.percent }}:h=60:color=white@0.75:t=fill, \
-          drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile=stats.txt:expansion=none:x=(w-text_w)/2:y=923:fontsize=40:fontcolor=white[final]; \
-          [2:a]volume=0.35[aout]" \
-          -map "[final]" -map "[aout]" \
-          -vcodec libx264 -preset veryfast -b:v 4500k -maxrate 4500k -bufsize 9000k -pix_fmt yuv420p -g 60 \
-          -acodec aac -ab 128k -ar 44100 \
-          -f flv "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}" || true
-
-      - name: Stop Broadcast
-        run: |
-          curl -s -X POST \
-          "https://www.googleapis.com/youtube/v3/liveBroadcasts/transition?broadcastStatus=complete&id=${{ env.broadcast_id }}&part=id,status" \
-          -H "Authorization: Bearer ${{ env.access_token }}" \
-          -H "Content-Type: application/json"
-          echo "Broadcast stopped!"
-
-      - name: Wait 10 minutes
-        run: sleep 600
-
-      - name: Keep Repo Active
-        run: |
-          git config user.email "actions@github.com"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "GitHub Actions"
-          git commit --allow-empty -m "keep alive"
+          git commit --allow-empty -m "keepalive: $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
