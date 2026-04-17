@@ -67,5 +67,9 @@ jobs:
           -H 'Authorization: Bearer ${{ env.access_token }}'
       - name: Wait 10 minutes
         run: sleep 600
-      - name: Keep Repo Active
-        run: git commit --allow-empty -m 'keep alive' && git push
+      - name: Keep Repository Active
+  run: |
+    git config user.email "github-actions[bot]@users.noreply.github.com"
+    git config user.name "GitHub Actions"
+    git commit --allow-empty -m "keepalive: $(date -u)"
+    git push --force-with-lease origin main
