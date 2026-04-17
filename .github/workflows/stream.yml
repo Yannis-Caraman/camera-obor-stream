@@ -3,10 +3,10 @@ name: Camera Obor FULL-HD PRO 24/7
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 6 * * *'   # 09:00 Romania
-    - cron: '0 12 * * *'  # 15:00 Romania
-    - cron: '0 18 * * *'  # 21:00 Romania
-    - cron: '0 0 * * *'   # 03:00 Romania
+    - cron: '0 6 * * *'
+    - cron: '0 12 * * *'
+    - cron: '0 18 * * *'
+    - cron: '0 0 * * *'
 
 concurrency:
   group: camera-stream
@@ -15,81 +15,80 @@ concurrency:
 jobs:
   run-stream:
     runs-on: ubuntu-latest
-    timeout-minutes: 375  # 6h15min - safety net la nivel de job
+    timeout-minutes: 375
 
     steps:
 
-      # ------------------------------------------------------------------ #
-      # 1. Checkout repo
-      # ------------------------------------------------------------------ #
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------------ #
-      # 2. Instaleaza ffmpeg si unelte
-      # ------------------------------------------------------------------ #
       - name: Install Tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ffmpeg bc jq curl
 
-      # ------------------------------------------------------------------ #
-      # 3. Citeste numarul de abonati (foloseste API Key, NU OAuth)
-      # ------------------------------------------------------------------ #
-      - name: Get Subscriber Count
+      # ---------------------------------------------------------------
+      # Citeste abonati si calculeaza procentul pentru bara
+      # ---------------------------------------------------------------
+      - name: Get Real Subs and Calculate Bar
         id: subs
         run: |
-          echo "=== Citesc abonati canal ==="
-          RESPONSE=$(curl -s \
-            "https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${{ secrets.CHANNEL_ID }}&key=${{ secrets.YOUTUBE_API_KEY }}")
-
+          RESPONSE=$(curl -s "https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${{ secrets.CHANNEL_ID }}&key=${{ secrets.YOUTUBE_API_KEY }}")
           SUBS=$(echo "$RESPONSE" | jq -r '.items[0].statistics.subscriberCount // "0"')
-          echo "Abonati gasiti: $SUBS"
-
           TARGET=1000
-          if [ "$SUBS" -eq 0 ]; then
-            PERCENT_INT=0
-          else
-            PERCENT_INT=$(( (SUBS * 100) / TARGET ))
-          fi
-
+          PERCENT_INT=$(( (SUBS * 100) / TARGET ))
           if [ "$PERCENT_INT" -gt 100 ]; then PERCENT_INT=100; fi
-
-          echo "Progres spre 1000: $SUBS / $TARGET ($PERCENT_INT%)"
-          echo "subs=$SUBS" >> $GITHUB_OUTPUT
+          PERCENT=$(echo "scale=4; $PERCENT_INT / 100" | bc)
+          echo "Abonati: $SUBS / $TARGET ($PERCENT_INT%)"
+          echo "subs=$SUBS"        >> $GITHUB_OUTPUT
+          echo "percent=$PERCENT"  >> $GITHUB_OUTPUT
           echo "percent_int=$PERCENT_INT" >> $GITHUB_OUTPUT
 
-      # ------------------------------------------------------------------ #
-      # 4. STREAM - ffmpeg ruleaza exact 5h50min (21000 secunde)
-      #    - Input 0: camera RTSP
-      #    - Input 1: video.mp4 (animatie subscribe green screen)
-      #    - Input 2: playlist.txt (muzica lounge)
-      #    Dupa 21000 secunde ffmpeg se opreste singur.
-      #    YouTube inchide live-ul automat cand nu mai primeste date.
-      #    La urmatorul cron (6 ore mai tarziu) un nou stream porneste.
-      # ------------------------------------------------------------------ #
+      # ---------------------------------------------------------------
+      # STREAM - ffmpeg 5h50min
+      # Input 0: camera RTSP
+      # Input 1: video.mp4 (animatie subscribe, GREEN SCREEN)
+      # Input 2: playlist.txt (muzica)
+      # ---------------------------------------------------------------
       - name: Start Streaming (5h50min)
+        env:
+          SUBS: ${{ steps.subs.outputs.subs }}
+          PERCENT: ${{ steps.subs.outputs.percent }}
+          PERCENT_INT: ${{ steps.subs.outputs.percent_int }}
         run: |
-          echo "=== START STREAM - $(date -u) ==="
-          echo "Abonati: ${{ steps.subs.outputs.subs }} / 1000"
+          echo "=== START STREAM $(date -u) | Abonati: $SUBS / 1000 ($PERCENT_INT%) ==="
+
+          # Calculeaza latimea barei de progres (din 1920px)
+          BAR_WIDTH=$(echo "scale=0; 1920 * $PERCENT / 1" | bc)
+          if [ -z "$BAR_WIDTH" ] || [ "$BAR_WIDTH" -lt 1 ]; then BAR_WIDTH=1; fi
+
+          # Scrie filter_complex intr-un fisier ca sa evitam probleme de trunchiere bash
+          cat > /tmp/filter.txt << FILTEREOF
+[0:v]scale=1920:1080,setsar=1[cam];
+[1:v]scale=1920:1080,setsar=1[overlay_raw];
+[overlay_raw]chromakey=color=green:similarity=0.3:blend=0.05[overlay_keyed];
+[cam][overlay_keyed]overlay=0:0[with_overlay];
+[with_overlay]
+drawbox=x=0:y=1055:w=1920:h=25:color=black@0.75:t=fill,
+drawbox=x=0:y=1055:w=${BAR_WIDTH}:h=25:color=red@0.9:t=fill,
+drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${SUBS} / 1000 abonati':x=10:y=1060:fontsize=18:fontcolor=white:shadowcolor=black:shadowx=1:shadowy=1
+[final];
+[2:a]volume=0.35[aout]
+FILTEREOF
+
+          echo "=== Filter complex ==="
+          cat /tmp/filter.txt
 
           timeout 21000 ffmpeg \
             -hide_banner \
-            -loglevel error \
+            -loglevel warning \
             -rtsp_transport tcp \
             -i "${{ secrets.RTSP_URL }}" \
-            -stream_loop -1 \
-            -i "video.mp4" \
-            -stream_loop -1 \
-            -f concat -safe 0 \
-            -i "playlist.txt" \
-            -filter_complex \
-              "[1:v]colorkey=0x00FF00:0.3:0.1[subscribe_overlay]; \
-               [0:v]scale=1920:1080,format=yuv420p[cam]; \
-               [cam][subscribe_overlay]overlay=W-w-30:H-h-30[final]; \
-               [2:a]volume=0.35[music_out]" \
+            -stream_loop -1 -i "video.mp4" \
+            -stream_loop -1 -f concat -safe 0 -i "playlist.txt" \
+            -filter_complex_script /tmp/filter.txt \
             -map "[final]" \
-            -map "[music_out]" \
+            -map "[aout]" \
             -c:v libx264 \
             -preset veryfast \
             -tune zerolatency \
@@ -103,21 +102,11 @@ jobs:
             -f flv \
             "rtmp://a.rtmp.youtube.com/live2/${{ secrets.YOUTUBE_KEY }}" || true
 
-          echo "=== STREAM OPRIT - $(date -u) ==="
+          echo "=== STREAM OPRIT $(date -u) ==="
 
-      # ------------------------------------------------------------------ #
-      # 5. Asteapta 10 minute inainte ca urmatorul cron sa preia
-      #    (buffer intre sesiuni - YouTube are nevoie de ~30-60s oricum)
-      # ------------------------------------------------------------------ #
       - name: Pauza 10 minute intre sesiuni
-        run: |
-          echo "Pauza 10 minute... urmatoarea sesiune porneste la urmatorul cron."
-          sleep 600
+        run: sleep 600
 
-      # ------------------------------------------------------------------ #
-      # 6. Commit gol ca sa tina repo-ul activ (GitHub dezactiveaza
-      #    Actions pe repo-uri inactive 60 zile)
-      # ------------------------------------------------------------------ #
       - name: Keep Repository Active
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"
